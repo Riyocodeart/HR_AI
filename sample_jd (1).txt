@@ -1,0 +1,33 @@
+Job Title: Data Scientist
+
+Company: FinTech Innovations Pvt Ltd
+Location: Mumbai, Maharashtra
+Employment Type: Full-Time
+
+About the Role:
+We are looking for a talented Data Scientist to join our growing analytics team. You will work on building machine learning models to drive business insights and automate decision-making processes.
+
+Key Responsibilities:
+- Build and deploy machine learning models for fraud detection, credit scoring, and customer segmentation
+- Perform exploratory data analysis on large structured and unstructured datasets
+- Collaborate with engineering teams to productionize ML models
+- Communicate findings to stakeholders through visualizations and reports
+
+Required Skills:
+- Python (mandatory)
+- Machine Learning / ML frameworks (Sklearn, XGBoost)
+- SQL for data extraction and analysis
+- Pandas, NumPy for data manipulation
+- Statistics and probability
+
+Nice to Have:
+- TensorFlow or PyTorch
+- NLP experience
+- Cloud platforms (AWS/GCP)
+
+Experience Required: 3 years minimum
+
+Education:
+B.Tech/M.Tech in Computer Science, Data Science, Statistics or related field
+
+Industry: FinTech / Financial Services

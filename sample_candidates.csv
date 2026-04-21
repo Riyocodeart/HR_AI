@@ -1,0 +1,31 @@
+name,role,location,experience,skills,company,education
+Priya Sharma,Data Scientist,Mumbai,4,Python ML TensorFlow Pandas SQL,TCS,B.Tech Computer Science
+Rohit Verma,ML Engineer,Mumbai,3,Python ML Sklearn NLP Deep Learning,Infosys,M.Tech Data Science
+Anita Patel,Data Analyst,Pune,5,Python SQL Tableau Power BI Excel,Wipro,B.Sc Statistics
+Karan Mehta,Data Scientist,Mumbai,2,Python R Machine Learning SQL,Startup,B.Tech IT
+Sanjana Gupta,Senior Data Scientist,Bangalore,6,Python ML TensorFlow Keras NLP Computer Vision,Amazon,M.Tech AI
+Vikram Singh,Data Engineer,Mumbai,4,Python Spark Hadoop SQL ETL,HDFC Bank,B.Tech CSE
+Neha Joshi,Data Scientist,Mumbai,3,Python ML Scikit-learn Pandas Matplotlib,Flipkart,M.Sc Data Science
+Arjun Rao,Business Analyst,Hyderabad,5,SQL Excel Tableau Python,Deloitte,MBA
+Deepika Nair,ML Engineer,Mumbai,3,Python TensorFlow PyTorch Deep Learning NLP,Ola,B.Tech AI/ML
+Suresh Kumar,Data Scientist,Chennai,4,Python ML R Statistics,Cognizant,M.Sc Statistics
+Pooja Iyer,Data Scientist,Mumbai,2,Python ML Pandas SQL Visualization,Byju's,B.Tech CSE
+Rajesh Khanna,Senior ML Engineer,Mumbai,7,Python ML TensorFlow PyTorch Computer Vision NLP Spark,Google,M.Tech CSE
+Meera Krishnan,Data Analyst,Mumbai,1,SQL Python Tableau Excel,Freshworks,B.Com
+Aditya Jain,Data Scientist,Mumbai,3,Python ML Sklearn XGBoost Feature Engineering SQL,Reliance,B.Tech Data Science
+Shruti Desai,AI Engineer,Pune,4,Python ML Deep Learning TensorFlow NLP Transformers,HCL,M.Tech AI
+Nikhil Bose,Data Scientist,Kolkata,5,Python ML R SQL Pandas Statistics,IBM,M.Sc Data Science
+Tanvi Malhotra,Data Scientist,Mumbai,3,Python ML Sklearn Pandas SQL EDA,PayTM,B.Tech CSE
+Varun Kapoor,Machine Learning Engineer,Delhi,4,Python ML TensorFlow Cloud AWS NLP,Microsoft,B.Tech CSE
+Riya Shah,Junior Data Scientist,Mumbai,1,Python SQL Statistics Tableau,Zomato,B.Sc Maths
+Harish Pillai,Senior Data Scientist,Mumbai,8,Python ML Deep Learning NLP Computer Vision MLOps,Meta,PhD CS
+Divya Reddy,Data Scientist,Hyderabad,3,Python ML Pandas SQL Sklearn,Swiggy,B.Tech CSE
+Amit Saxena,Data Scientist,Mumbai,4,Python ML XGBoost LightGBM Feature Engineering Statistics,ICICI Bank,M.Tech Data Science
+Kavya Menon,Data Engineer,Bangalore,5,Python Spark SQL Hadoop Kafka Airflow,Uber,B.Tech CSE
+Akash Gupta,Data Scientist,Mumbai,3,Python ML Sklearn Pandas SQL Visualization EDA,Myntra,B.Tech IT
+Shalini Verma,Research Scientist,Pune,6,Python ML Deep Learning NLP Research Publications,Samsung,PhD AI
+Mihir Shah,Data Scientist,Mumbai,2,Python SQL Statistics R Machine Learning,Nykaa,B.Sc Statistics
+Preeti Agarwal,Senior Data Scientist,Mumbai,5,Python ML TensorFlow NLP Recommendation Systems,Netflix India,M.Tech CSE
+Rohit Das,Data Science Intern,Mumbai,0,Python SQL Machine Learning Basics Excel,College Project,B.Tech Ongoing
+Sneha Iyer,Data Scientist,Mumbai,3,Python ML Pandas SQL Sklearn Feature Engineering,Bajaj Finserv,B.Tech CSE
+Kunal Mehta,ML Architect,Mumbai,9,Python ML Deep Learning MLOps Cloud Architecture TensorFlow PyTorch,Razorpay,M.Tech CSE
