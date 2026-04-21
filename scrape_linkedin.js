@@ -1,21 +1,31 @@
+require("dotenv").config();
+
 const fs = require("fs");
 const { LinkedInProfileScraper } = require("linkedin-profile-scraper");
 
-const delay = (ms) => new Promise((res) => setTimeout(res, ms));
+console.log("ENV COOKIE:", process.env.LI_AT);
+
+// ❗ Stop immediately if cookie missing
+if (!process.env.LI_AT) {
+  throw new Error("❌ LI_AT not loaded from .env");
+}
+
+const delay = (ms) => new Promise(res => setTimeout(res, ms));
 
 (async () => {
+  console.log("🚀 Starting scraper...");
+
   const scraper = new LinkedInProfileScraper({
-    sessionCookieValue: "AQEDAWIvuk8E1w5MAAABna2xtXsAAAGd0b45e04ADNtYwY248lMbKU8__bUfOhw8d19Rqhzqs0b2OSkD0-Wc6DZptMebdm3JLG-1fYlD5WasxKvxua7fvyxJxYsTW3vY160o7RZ3q3Y6cmqt-yZroj7t",
-    keepAlive: true
+    sessionCookieValue: process.env.LI_AT,
+    keepAlive: true,
+    headless: false
   });
 
-  console.log("🚀 Starting scraper...");
   await scraper.setup();
 
   const profileUrls = [
     "https://www.linkedin.com/in/ananddubey104/",
-    "https://www.linkedin.com/in/anujhsawant/",
-    "https://www.linkedin.com/in/atharva2706/"
+    "https://www.linkedin.com/in/anujhsawant/"
   ];
 
   let results = [];
@@ -23,25 +33,29 @@ const delay = (ms) => new Promise((res) => setTimeout(res, ms));
   for (let i = 0; i < profileUrls.length; i++) {
     const url = profileUrls[i];
 
-    try {
-      console.log(`\n🔍 Scraping (${i + 1}/${profileUrls.length}): ${url}`);
+    console.log(`\n🔍 Scraping (${i + 1}/${profileUrls.length}): ${url}`);
 
+    try {
       const data = await scraper.run(url);
+
+      if (!data.userProfile.fullName) {
+        console.log("⚠️ Blocked / Not logged in:", url);
+        continue;
+      }
+
+      console.log("✅ Got:", data.userProfile.fullName);
       results.push(data);
 
-      console.log("✅ Done");
-
-      const waitTime = 5000 + Math.random() * 3000;
+      const waitTime = 10000 + Math.random() * 10000;
       console.log(`⏳ Waiting ${Math.floor(waitTime / 1000)} sec...\n`);
       await delay(waitTime);
 
     } catch (err) {
-      console.log("❌ Error scraping:", url);
-      console.log(err.message);
+      console.log("❌ Error:", err.message);
     }
   }
 
   fs.writeFileSync("linkedin_results.json", JSON.stringify(results, null, 2));
 
-  console.log("\n🎉 Scraping completed!");
+  console.log("\n🎉 Done!");
 })();

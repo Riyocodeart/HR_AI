@@ -16,6 +16,7 @@ A full-stack AI-powered recruiter tool built with Streamlit + OpenAI.
 pip install -r requirements.txt
 streamlit run app.py
 npm install linkedin-profile-scraper
+node scrape_linkedin.js
 ```
 
 ## CSV Format
