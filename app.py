@@ -8,6 +8,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from jd_parser import parse_jd, parse_jd_from_upload
+try:
+    from jd_parser import parse_jd_with_llm_fallback as _parse_jd_llm
+    _LLM_FALLBACK_AVAILABLE = True
+except ImportError:
+    _LLM_FALLBACK_AVAILABLE = False
 from filter import load_candidates, score_candidates, export_excel, export_csv
 from chrome import generate_linkedin_url
 
@@ -413,7 +418,7 @@ defaults = {
     "jd_data": None, "jd_text": None, "candidates_df": None,
     "scored_df": None, "linkedin_url": None,
     "selected_candidates": [], "email_drafts": {}, "send_log": [],
-    "active_tab": "recruiter",
+    "active_tab": "recruiter", "name_col_detected": None,
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -485,9 +490,13 @@ with st.sidebar:
 
     else:  # email tab sidebar
         st.markdown('<div class="sidebar-section-label">Sender Details</div>', unsafe_allow_html=True)
-        sender_name  = st.text_input("Your name", value="Hiring Manager",   placeholder="Hiring Manager Name",  label_visibility="collapsed")
-        company_name = st.text_input("Company",   value="Our Company",      placeholder="Company Name",          label_visibility="collapsed")
-        jd_role_e    = st.text_input("Role",       value="Software Engineer",placeholder="Role being hired for", label_visibility="collapsed")
+        # Pre-populate Role and Company from parsed JD if available
+        _jd = st.session_state.get("jd_data") or {}
+        _default_company = _jd.get("company") or "Our Company"
+        _default_role    = _jd.get("role")    or "Software Engineer"
+        sender_name  = st.text_input("Your name", value="Hiring Manager",    placeholder="Hiring Manager Name",  label_visibility="collapsed")
+        company_name = st.text_input("Company",   value=_default_company,    placeholder="Company Name",          label_visibility="collapsed")
+        jd_role_e    = st.text_input("Role",       value=_default_role,      placeholder="Role being hired for", label_visibility="collapsed")
         st.divider()
         st.markdown('<div class="sidebar-section-label">Email Template</div>', unsafe_allow_html=True)
         email_type = st.selectbox("Template", [
@@ -539,14 +548,60 @@ if st.session_state.active_tab == "recruiter":
         if upload_mode == "Upload File (PDF / DOCX / TXT)":
             jd_file = st.file_uploader("Drop your JD here", type=["pdf", "docx", "txt"], label_visibility="collapsed")
             if jd_file:
-                try:
-                    jd_data_parsed, jd_text_input = parse_jd_from_upload(jd_file)
-                    st.session_state.jd_data      = jd_data_parsed
-                    st.session_state.jd_text      = jd_text_input
-                    st.session_state.linkedin_url = generate_linkedin_url(jd_data_parsed)
-                    st.success(f"✓ Parsed **{jd_file.name}** — {len(jd_text_input):,} characters extracted")
-                except Exception as e:
-                    st.error(f"Could not parse file: {e}")
+                # ── Guard: only re-parse when a NEW file is uploaded ──────────
+                # Without this, every rerun (including after Save Corrections)
+                # calls parse_jd_from_upload again and overwrites your edits.
+                import hashlib
+                file_hash = hashlib.md5(jd_file.getvalue()).hexdigest()
+                if st.session_state.get("_jd_file_hash") != file_hash:
+                    try:
+                        jd_data_parsed, jd_text_input = parse_jd_from_upload(jd_file)
+                        # Assign a NEW dict — never mutate in place for session state
+                        st.session_state.jd_data      = dict(jd_data_parsed)
+                        st.session_state.jd_text      = jd_text_input
+                        st.session_state.linkedin_url = generate_linkedin_url(jd_data_parsed)
+                        st.session_state["_jd_file_hash"] = file_hash
+                        missing = [f for f in ("role", "company") if not jd_data_parsed.get(f)]
+                        if missing:
+                            st.warning(
+                                f"⚠ Could not auto-detect: **{', '.join(missing)}**. "
+                                "Use the fields below to correct them manually."
+                            )
+                        else:
+                            st.success(f"✓ Parsed **{jd_file.name}** — {len(jd_text_input):,} characters extracted")
+                    except Exception as e:
+                        st.error(f"Could not parse file: {e}")
+
+            # ── Manual correction expander ────────────────────────────────────
+            if st.session_state.jd_data:
+                with st.expander("✏ Manually correct extracted fields", expanded=False):
+                    jd = st.session_state.jd_data
+                    col_a, col_b = st.columns(2)
+                    new_role    = col_a.text_input("Role",    value=jd.get("role","")    or "", key="manual_role")
+                    new_company = col_b.text_input("Company", value=jd.get("company","") or "", key="manual_company")
+                    col_c, col_d = st.columns(2)
+                    new_loc     = col_c.text_input("Location", value=jd.get("location","") or "", key="manual_loc")
+                    new_ind     = col_d.text_input("Industry", value=jd.get("industry","") or "", key="manual_ind")
+                    col_e, col_f = st.columns(2)
+                    new_exp_min = col_e.number_input("Experience min (yrs)", min_value=0, max_value=40,
+                                                     value=int(jd.get("experience_min") or 0), key="manual_exp_min")
+                    new_exp_max = col_f.number_input("Experience max (yrs, 0 = open-ended)", min_value=0, max_value=40,
+                                                     value=int(jd.get("experience_max") or 0), key="manual_exp_max")
+                    if st.button("💾  Save Corrections", key="save_manual_corrections"):
+                        # FIX: assign a completely NEW dict instead of .update() in place.
+                        # Streamlit only detects session state changes on key reassignment,
+                        # not on in-place dict mutation. .update() was silently failing.
+                        updated = dict(st.session_state.jd_data)   # copy current
+                        updated["role"]           = new_role    or jd.get("role") or ""
+                        updated["company"]        = new_company or jd.get("company") or ""
+                        updated["location"]       = new_loc     or jd.get("location") or ""
+                        updated["industry"]       = new_ind     or jd.get("industry") or ""
+                        updated["experience_min"] = new_exp_min if new_exp_min > 0 else jd.get("experience_min")
+                        updated["experience_max"] = new_exp_max if new_exp_max > 0 else None
+                        st.session_state.jd_data      = updated   # full reassignment
+                        st.session_state.linkedin_url = generate_linkedin_url(updated)
+                        st.success("✓ Corrections saved.")
+                        st.rerun()
         else:
             jd_text_pasted = st.text_area("Paste JD text here", height=230,
                 placeholder="Role: Data Scientist\nSkills: Python, ML, SQL\nLocation: Mumbai\nExperience: 3-5 years\n...",
@@ -557,16 +612,47 @@ if st.session_state.active_tab == "recruiter":
                     st.session_state.jd_data      = jd_data_parsed
                     st.session_state.jd_text      = jd_text_pasted
                     st.session_state.linkedin_url = generate_linkedin_url(jd_data_parsed)
-                    st.success("✓ JD extracted successfully.")
+                    missing = [f for f in ("role", "company") if not jd_data_parsed.get(f)]
+                    if missing:
+                        st.warning(f"⚠ Could not auto-detect: **{', '.join(missing)}**. Correct below.")
+                    else:
+                        st.success("✓ JD extracted successfully.")
                     st.rerun()
+
+            # ── Manual correction expander ──
+            if st.session_state.jd_data:
+                with st.expander("✏ Manually correct extracted fields", expanded=False):
+                    jd = st.session_state.jd_data
+                    col_a, col_b = st.columns(2)
+                    new_role    = col_a.text_input("Role",    value=jd.get("role","")    or "", key="manual_role_p")
+                    new_company = col_b.text_input("Company", value=jd.get("company","") or "", key="manual_company_p")
+                    col_c, col_d = st.columns(2)
+                    new_loc     = col_c.text_input("Location", value=jd.get("location","") or "", key="manual_loc_p")
+                    new_ind     = col_d.text_input("Industry", value=jd.get("industry","") or "", key="manual_ind_p")
+                    if st.button("💾  Save Corrections", key="save_manual_corrections_p"):
+                        # FIX: full dict reassignment — same reason as upload path above
+                        updated = dict(st.session_state.jd_data)
+                        updated["role"]     = new_role    or jd.get("role") or ""
+                        updated["company"]  = new_company or jd.get("company") or ""
+                        updated["location"] = new_loc     or jd.get("location") or ""
+                        updated["industry"] = new_ind     or jd.get("industry") or ""
+                        st.session_state.jd_data      = updated
+                        st.session_state.linkedin_url = generate_linkedin_url(updated)
+                        st.success("✓ Corrections saved.")
+                        st.rerun()
     with jd_col2:
         jd = st.session_state.jd_data
         if jd:
             for label, value in [
-                ("Role", jd.get("role","—")), ("Location", jd.get("location","—")),
-                ("Experience", f"{jd.get('experience_min','?')}–{jd.get('experience_max','?')} yrs"),
+                ("Role", jd.get("role","—")), ("Company", jd.get("company","—")),
+                ("Location", jd.get("location","—")),
+                ("Experience", (
+                    f"{jd.get('experience_min','?')}+ yrs"
+                    if jd.get('experience_max') is None and jd.get('experience_min') is not None
+                    else f"{jd.get('experience_min','?')}–{jd.get('experience_max','?')} yrs"
+                )),
                 ("Industry", jd.get("industry","—")), ("Type", jd.get("employment_type","—")),
-                ("Company", jd.get("company","—")),
+                ("Education", jd.get("education","—")),
             ]:
                 st.markdown(f'<div class="jd-field"><div class="lbl">{label}</div><div class="val">{value}</div></div>', unsafe_allow_html=True)
             skills = jd.get("skills", [])
