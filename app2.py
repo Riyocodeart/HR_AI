@@ -1,6 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv()
-
 import streamlit as st
 import pandas as pd
 import json
@@ -11,11 +8,6 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 from jd_parser import parse_jd, parse_jd_from_upload
-try:
-    from jd_parser import parse_jd_with_llm_fallback as _parse_jd_llm
-    _LLM_FALLBACK_AVAILABLE = True
-except ImportError:
-    _LLM_FALLBACK_AVAILABLE = False
 from filter import load_candidates, score_candidates, export_excel, export_csv
 from chrome import generate_linkedin_url
 
@@ -32,8 +24,6 @@ except ImportError:
 SCOPES     = ["https://www.googleapis.com/auth/gmail.send"]
 TOKEN_FILE = "token.pickle"
 CREDS_FILE = "credentials.json"
-
-
 
 # ─── Page Config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -423,7 +413,7 @@ defaults = {
     "jd_data": None, "jd_text": None, "candidates_df": None,
     "scored_df": None, "linkedin_url": None,
     "selected_candidates": [], "email_drafts": {}, "send_log": [],
-    "active_tab": "recruiter", "name_col_detected": None,
+    "active_tab": "recruiter",
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -495,13 +485,9 @@ with st.sidebar:
 
     else:  # email tab sidebar
         st.markdown('<div class="sidebar-section-label">Sender Details</div>', unsafe_allow_html=True)
-        # Pre-populate Role and Company from parsed JD if available
-        _jd = st.session_state.get("jd_data") or {}
-        _default_company = _jd.get("company") or "Our Company"
-        _default_role    = _jd.get("role")    or "Software Engineer"
-        sender_name  = st.text_input("Your name", value="Hiring Manager",    placeholder="Hiring Manager Name",  label_visibility="collapsed")
-        company_name = st.text_input("Company",   value=_default_company,    placeholder="Company Name",          label_visibility="collapsed")
-        jd_role_e    = st.text_input("Role",       value=_default_role,      placeholder="Role being hired for", label_visibility="collapsed")
+        sender_name  = st.text_input("Your name", value="Hiring Manager",   placeholder="Hiring Manager Name",  label_visibility="collapsed")
+        company_name = st.text_input("Company",   value="Our Company",      placeholder="Company Name",          label_visibility="collapsed")
+        jd_role_e    = st.text_input("Role",       value="Software Engineer",placeholder="Role being hired for", label_visibility="collapsed")
         st.divider()
         st.markdown('<div class="sidebar-section-label">Email Template</div>', unsafe_allow_html=True)
         email_type = st.selectbox("Template", [
@@ -550,9 +536,12 @@ if st.session_state.active_tab == "recruiter":
     jd_col1, jd_col2 = st.columns([1, 1], gap="large")
     with jd_col1:
         upload_mode = st.radio("Input method", ["Upload File (PDF / DOCX / TXT)", "Paste text"], horizontal=True)
+
         if upload_mode == "Upload File (PDF / DOCX / TXT)":
             jd_file = st.file_uploader("Drop your JD here", type=["pdf", "docx", "txt"], label_visibility="collapsed")
             if jd_file:
+                # Only re-parse when a NEW file is uploaded — prevents parse from
+                # overwriting manual corrections on every rerun
                 import hashlib
                 file_hash = hashlib.md5(jd_file.getvalue()).hexdigest()
                 if st.session_state.get("_jd_file_hash") != file_hash:
@@ -561,6 +550,7 @@ if st.session_state.active_tab == "recruiter":
                         if not jd_data_parsed.get("role") or not jd_data_parsed.get("company"):
                             from jd_parser import parse_jd_with_llm_fallback
                             jd_data_parsed = parse_jd_with_llm_fallback(jd_text_input)
+                        # Full reassignment (not .update()) so Streamlit detects the change
                         st.session_state.jd_data      = dict(jd_data_parsed)
                         st.session_state.jd_text      = jd_text_input
                         st.session_state.linkedin_url = generate_linkedin_url(jd_data_parsed)
@@ -572,6 +562,35 @@ if st.session_state.active_tab == "recruiter":
                             st.success(f"✓ Parsed **{jd_file.name}** — {len(jd_text_input):,} characters extracted")
                     except Exception as e:
                         st.error(f"Could not parse file: {e}")
+
+            # ── Manual correction expander — FILE UPLOAD path ──
+            if st.session_state.jd_data:
+                with st.expander("✏  Manually correct extracted fields", expanded=False):
+                    jd = st.session_state.jd_data
+                    col_a, col_b = st.columns(2)
+                    new_role    = col_a.text_input("Role",    value=jd.get("role","")    or "", key="manual_role")
+                    new_company = col_b.text_input("Company", value=jd.get("company","") or "", key="manual_company")
+                    col_c, col_d = st.columns(2)
+                    new_loc     = col_c.text_input("Location", value=jd.get("location","") or "", key="manual_loc")
+                    new_ind     = col_d.text_input("Industry", value=jd.get("industry","") or "", key="manual_ind")
+                    col_e, col_f = st.columns(2)
+                    new_exp_min = col_e.number_input("Exp min (yrs)", min_value=0, max_value=40,
+                                    value=int(jd.get("experience_min") or 0), key="manual_exp_min")
+                    new_exp_max = col_f.number_input("Exp max (yrs, 0=open)", min_value=0, max_value=40,
+                                    value=int(jd.get("experience_max") or 0), key="manual_exp_max")
+                    if st.button("💾  Save Corrections", key="save_corrections_upload"):
+                        updated = dict(st.session_state.jd_data)
+                        updated["role"]           = new_role    or jd.get("role") or ""
+                        updated["company"]        = new_company or jd.get("company") or ""
+                        updated["location"]       = new_loc     or jd.get("location") or ""
+                        updated["industry"]       = new_ind     or jd.get("industry") or ""
+                        updated["experience_min"] = new_exp_min if new_exp_min > 0 else jd.get("experience_min")
+                        updated["experience_max"] = new_exp_max if new_exp_max > 0 else None
+                        st.session_state.jd_data      = updated   # full reassignment — triggers Streamlit update
+                        st.session_state.linkedin_url = generate_linkedin_url(updated)
+                        st.success("✓ Corrections saved.")
+                        st.rerun()
+
         else:
             jd_text_pasted = st.text_area("Paste JD text here", height=230,
                 placeholder="Role: Data Scientist\nSkills: Python, ML, SQL\nLocation: Mumbai\nExperience: 3-5 years\n...",
@@ -589,10 +608,10 @@ if st.session_state.active_tab == "recruiter":
                     else:
                         st.success("✓ JD extracted successfully.")
                     st.rerun()
- 
-            # ── Manual correction expander ──
+
+            # ── Manual correction expander — PASTE TEXT path ──
             if st.session_state.jd_data:
-                with st.expander("✏ Manually correct extracted fields", expanded=False):
+                with st.expander("✏  Manually correct extracted fields", expanded=False):
                     jd = st.session_state.jd_data
                     col_a, col_b = st.columns(2)
                     new_role    = col_a.text_input("Role",    value=jd.get("role","")    or "", key="manual_role_p")
@@ -600,30 +619,39 @@ if st.session_state.active_tab == "recruiter":
                     col_c, col_d = st.columns(2)
                     new_loc     = col_c.text_input("Location", value=jd.get("location","") or "", key="manual_loc_p")
                     new_ind     = col_d.text_input("Industry", value=jd.get("industry","") or "", key="manual_ind_p")
-                    if st.button("💾  Save Corrections", key="save_manual_corrections_p"):
-                        # FIX: full dict reassignment — same reason as upload path above
+                    col_e, col_f = st.columns(2)
+                    new_exp_min = col_e.number_input("Exp min (yrs)", min_value=0, max_value=40,
+                                    value=int(jd.get("experience_min") or 0), key="manual_exp_min_p")
+                    new_exp_max = col_f.number_input("Exp max (yrs, 0=open)", min_value=0, max_value=40,
+                                    value=int(jd.get("experience_max") or 0), key="manual_exp_max_p")
+                    if st.button("💾  Save Corrections", key="save_corrections_paste"):
                         updated = dict(st.session_state.jd_data)
-                        updated["role"]     = new_role    or jd.get("role") or ""
-                        updated["company"]  = new_company or jd.get("company") or ""
-                        updated["location"] = new_loc     or jd.get("location") or ""
-                        updated["industry"] = new_ind     or jd.get("industry") or ""
+                        updated["role"]           = new_role    or jd.get("role") or ""
+                        updated["company"]        = new_company or jd.get("company") or ""
+                        updated["location"]       = new_loc     or jd.get("location") or ""
+                        updated["industry"]       = new_ind     or jd.get("industry") or ""
+                        updated["experience_min"] = new_exp_min if new_exp_min > 0 else jd.get("experience_min")
+                        updated["experience_max"] = new_exp_max if new_exp_max > 0 else None
                         st.session_state.jd_data      = updated
                         st.session_state.linkedin_url = generate_linkedin_url(updated)
                         st.success("✓ Corrections saved.")
                         st.rerun()
+
     with jd_col2:
         jd = st.session_state.jd_data
         if jd:
             for label, value in [
-                ("Role", jd.get("role","—")), ("Company", jd.get("company","—")),
+                ("Role",     jd.get("role","—")),
+                ("Company",  jd.get("company","—")),
                 ("Location", jd.get("location","—")),
                 ("Experience", (
                     f"{jd.get('experience_min','?')}+ yrs"
                     if jd.get('experience_max') is None and jd.get('experience_min') is not None
                     else f"{jd.get('experience_min','?')}–{jd.get('experience_max','?')} yrs"
                 )),
-                ("Industry", jd.get("industry","—")), ("Type", jd.get("employment_type","—")),
-                ("Education", jd.get("education","—")),
+                ("Industry", jd.get("industry","—")),
+                ("Type",     jd.get("employment_type","—")),
+                ("Education",jd.get("education","—")),
             ]:
                 st.markdown(f'<div class="jd-field"><div class="lbl">{label}</div><div class="val">{value}</div></div>', unsafe_allow_html=True)
             skills = jd.get("skills", [])
@@ -640,25 +668,66 @@ if st.session_state.active_tab == "recruiter":
     # ── STEP 2 — LinkedIn ───────────────────────────────────────────────
     if st.session_state.jd_data and st.session_state.linkedin_url:
         st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 02</div><div class="step-title">LinkedIn People Search</div>', unsafe_allow_html=True)
-        li_col1, li_col2 = st.columns([3, 1], gap="large")
+        jd = st.session_state.jd_data
+
+        # ── Search query editor ──────────────────────────────────────────
+        st.markdown('<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.63rem;letter-spacing:0.15em;text-transform:uppercase;color:var(--purple);margin-bottom:0.6rem">⬡ &nbsp; Customize Search Filters</div>', unsafe_allow_html=True)
+
+        sq1, sq2, sq3 = st.columns(3)
+        li_role     = sq1.text_input("Role / Title",    value=jd.get("role","")     or "", key="li_role",     placeholder="e.g. Data Scientist")
+        li_company  = sq2.text_input("Company",         value=jd.get("company","")  or "", key="li_company",  placeholder="e.g. Google")
+        li_location = sq3.text_input("Location",        value=jd.get("location","") or "", key="li_location", placeholder="e.g. Bangalore")
+
+        sq4, sq5 = st.columns([2, 1])
+        # Take top 6 skills as default, let user edit as comma-separated string
+        default_skills = ", ".join(jd.get("skills", [])[:6])
+        li_skills   = sq4.text_input("Skills (comma-separated)", value=default_skills, key="li_skills", placeholder="e.g. Python, SQL, AWS")
+        li_extra    = sq5.text_input("Extra keywords",            value="",             key="li_extra",  placeholder="e.g. startup, remote")
+
+        if st.button("🔄  Rebuild Search URL", key="rebuild_li_url"):
+            # Build a Boolean-style LinkedIn people search URL from the fields
+            parts = []
+            if li_role:
+                parts.append(f'"{li_role}"')
+            if li_skills:
+                skill_list = [s.strip() for s in li_skills.split(",") if s.strip()]
+                parts += [f'"{s}"' for s in skill_list[:6]]
+            if li_company:
+                parts.append(f'"{li_company}"')
+            if li_location:
+                parts.append(f'"{li_location}"')
+            if li_extra:
+                parts.append(li_extra.strip())
+
+            query = " ".join(parts)
+            import urllib.parse
+            new_url = f"https://www.linkedin.com/search/results/people/?keywords={urllib.parse.quote(query)}"
+            st.session_state.linkedin_url = new_url
+            st.success("✓ Search URL rebuilt.")
+            st.rerun()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # ── URL display ──────────────────────────────────────────────────
         url = st.session_state.linkedin_url
-        jd  = st.session_state.jd_data
+        li_col1, li_col2 = st.columns([3, 1], gap="large")
         with li_col1:
-            st.markdown(f'<div class="linkedin-card"><div class="li-label">⬡ Generated search URL from your JD</div><div class="li-url">{url}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="linkedin-card"><div class="li-label">⬡ Generated search URL</div><div class="li-url">{url}</div></div>', unsafe_allow_html=True)
             st.markdown("<br>", unsafe_allow_html=True)
             st.code(url, language=None)
         with li_col2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
+            st.markdown("<br>", unsafe_allow_html=True)
             st.link_button("→ Open on LinkedIn", url, width='stretch')
-            skills_str = ', '.join(jd.get('skills', [])[:4])
             st.markdown(f"""
             <div style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:#374151;letter-spacing:0.05em;line-height:2.2;margin-top:0.75rem">
-                <div style="color:var(--purple);text-transform:uppercase;letter-spacing:0.15em;font-size:0.63rem;margin-bottom:0.35rem;font-weight:600">Built from</div>
-                <div>Role · <strong>{jd.get('role','—')}</strong></div>
-                {'<div>Skills · <strong>' + skills_str + '</strong></div>' if skills_str else ''}
+                <div style="color:var(--purple);text-transform:uppercase;letter-spacing:0.15em;font-size:0.63rem;margin-bottom:0.35rem;font-weight:600">Active filters</div>
+                {'<div>Role · <strong>' + li_role + '</strong></div>' if li_role else ''}
+                {'<div>Company · <strong>' + li_company + '</strong></div>' if li_company else ''}
+                {'<div>Location · <strong>' + li_location + '</strong></div>' if li_location else ''}
+                {'<div>Skills · <strong>' + li_skills[:40] + ('…' if len(li_skills) > 40 else '') + '</strong></div>' if li_skills else ''}
             </div>""", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("Tip — After opening LinkedIn, apply filters for location, current company, or degree of connection.")
+        st.caption("Tip — Edit any filter above and click Rebuild. After opening LinkedIn you can also apply connection degree and date filters.")
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ── STEP 3 — Upload Candidates ──────────────────────────────────────
@@ -677,7 +746,7 @@ if st.session_state.active_tab == "recruiter":
         with c2:
             if st.session_state.candidates_df is not None:
                 st.caption("Preview — first 5 rows")
-                st.dataframe(st.session_state.candidates_df.head(), width='stretch', height=220)
+                st.dataframe(st.session_state.candidates_df.head(), use_container_width=True, height=220)
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ── STEP 4 — Score ──────────────────────────────────────────────────
@@ -699,11 +768,9 @@ if st.session_state.active_tab == "recruiter":
             name_col = st.session_state.get("name_col_detected", None)
             st.markdown("<br>", unsafe_allow_html=True)
             m1, m2, m3, m4 = st.columns(4)
-            # Guard: location_match column may not exist depending on filter.py version
             location_match_count = (
                 scored["location_match"].str.contains("✅").sum()
-                if "location_match" in scored.columns
-                else "—"
+                if "location_match" in scored.columns else "—"
             )
             for col, val, lbl in [
                 (m1, len(scored), "Total Candidates"),
@@ -743,7 +810,7 @@ if st.session_state.active_tab == "recruiter":
                 <div class="score-bar-bg"><div class="score-bar-fill" style="width:{score}%"></div></div>
                 """, unsafe_allow_html=True)
             with st.expander("View full scored table"):
-                st.dataframe(scored, width='stretch', height=400)
+                st.dataframe(scored, use_container_width=True, height=400)
 
             # ── CTA to email tab ──
             st.markdown("<br>", unsafe_allow_html=True)
@@ -1025,7 +1092,7 @@ else:
         if st.session_state.send_log:
             st.markdown("<br>", unsafe_allow_html=True)
             with st.expander("View Send Log"):
-                st.dataframe(pd.DataFrame(st.session_state.send_log), width='stretch')
+                st.dataframe(pd.DataFrame(st.session_state.send_log), use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 # ─── Footer ────────────────────────────────────────────────────────────────────

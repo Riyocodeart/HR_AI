@@ -1,8 +1,0 @@
-Name,Location,Experience_Years,Skills,ML_Experience,Tools,Cloud_Experience,Education,Previous_Company_Type,Score
-Amit Sharma,Mumbai,4,"Python;SQL;Pandas;Scikit-learn",Yes,"Power BI",AWS,"B.Tech Computer Science",Product,85
-Neha Verma,Pune,3,"Python;SQL;NumPy;Tableau",Yes,"Tableau",No,"MSc Data Science",Service,78
-Rahul Mehta,Mumbai,5,"Python;SQL;Pandas;NumPy;Scikit-learn",Yes,"Power BI",Azure,"B.Tech IT",Product,88
-Sneha Iyer,Bangalore,2,"Python;SQL;Excel",No,"Excel",No,"BSc Statistics",Service,65
-Karan Patel,Ahmedabad,6,"Python;SQL;Pandas;Deep Learning",Yes,"Tableau",AWS,"M.Tech AI",Product,90
-Priya Nair,Mumbai,4,"Python;SQL;Scikit-learn;NumPy",Yes,"Power BI",No,"B.Tech Computer Science",Service,82
-Arjun Singh,Delhi,3,"Python;SQL;Pandas",Yes,"Power BI",Azure,"BSc Data Science",Product,80
