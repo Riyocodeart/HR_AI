@@ -10,14 +10,15 @@ import pickle
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-from jd_parser import parse_jd, parse_jd_from_upload
+from core.parser import parse_jd, parse_jd_from_upload
 try:
-    from jd_parser import parse_jd_with_llm_fallback as _parse_jd_llm
+    from core.parser import parse_jd_with_llm_fallback as _parse_jd_llm
     _LLM_FALLBACK_AVAILABLE = True
 except ImportError:
     _LLM_FALLBACK_AVAILABLE = False
-from filter import load_candidates, score_candidates, export_excel, export_csv
-from chrome import generate_linkedin_url
+from core.scorer import load_candidates, score_candidates
+from core.exporter import export_excel, export_csv
+from core.linkedin import generate_linkedin_url
 
 # Gmail API
 try:
@@ -559,7 +560,7 @@ if st.session_state.active_tab == "recruiter":
                     try:
                         jd_data_parsed, jd_text_input = parse_jd_from_upload(jd_file)
                         if not jd_data_parsed.get("role") or not jd_data_parsed.get("company"):
-                            from jd_parser import parse_jd_with_llm_fallback
+                            from core.parser import parse_jd_with_llm_fallback
                             jd_data_parsed = parse_jd_with_llm_fallback(jd_text_input)
                         st.session_state.jd_data      = dict(jd_data_parsed)
                         st.session_state.jd_text      = jd_text_input
@@ -578,7 +579,7 @@ if st.session_state.active_tab == "recruiter":
                 label_visibility="collapsed")
             if st.button("⬡  Extract JD Details", width='stretch'):
                 if jd_text_pasted:
-                    from jd_parser import parse_jd_with_llm_fallback
+                    from core.parser import parse_jd_with_llm_fallback
                     jd_data_parsed = parse_jd_with_llm_fallback(jd_text_pasted)
                     st.session_state.jd_data      = dict(jd_data_parsed)
                     st.session_state.jd_text      = jd_text_pasted
@@ -724,27 +725,48 @@ if st.session_state.active_tab == "recruiter":
                 matched  = str(row.get("matched_skills",""))
                 missing  = str(row.get("missing_skills",""))
                 sc_color = "#7c3aed" if score >= 70 else ("#374151" if score >= 50 else "#f43f5e")
-                st.markdown(f"""
-                <div class="cand-row">
-                    <div class="rank-badge">#{rank}</div>
-                    <div style="flex:1;min-width:0">
-                        <div class="cand-name">{name_val}</div>
-                        <div class="cand-meta">{role_val} &nbsp;·&nbsp; {loc_val} &nbsp;{loc_flag}</div>
-                        <div style="margin-top:0.45rem">
-                            {''.join(f'<span class="tag tag-match">{s}</span>' for s in matched.split(", ") if s and s!="None")}
-                            {''.join(f'<span class="tag tag-miss">✗ {s}</span>' for s in missing.split(", ") if s and s!="None")}
-                        </div>
-                    </div>
-                    <div style="text-align:right;min-width:68px">
-                        <div style="font-family:'Syne',sans-serif;font-size:1.9rem;font-weight:800;color:{sc_color};line-height:1">{score}</div>
-                        <div style="font-family:'JetBrains Mono',monospace;font-size:0.63rem;color:#9ca3af">/ 100</div>
-                    </div>
-                </div>
-                <div class="score-bar-bg"><div class="score-bar-fill" style="width:{score}%"></div></div>
-                """, unsafe_allow_html=True)
-            with st.expander("View full scored table"):
-                st.dataframe(scored, width='stretch', height=400)
 
+
+                match_html = "".join(
+                    f'<span class="tag tag-match">{s.strip()}</span>'
+                    for s in matched.split(",")
+                    if s.strip() and s.strip() != "None"
+                    )
+
+                missing_html = "".join(
+                    f'<span class="tag tag-miss">✗ {s.strip()}</span>'
+                    for s in missing.split(",")
+                    if s.strip() and s.strip() != "None"
+                    )
+                st.markdown(f"""
+                            <div class="cand-row">
+                            <div class="rank-badge">#{rank}</div>
+                            <div style="flex:1;min-width:0">
+                            <div class="cand-name">{name_val}</div>
+                            <div class="cand-meta">
+                            {role_val} &nbsp;·&nbsp; {loc_val} &nbsp;{loc_flag}
+                            </div>
+                            <div style="margin-top:0.45rem">
+                            {match_html}
+                            {missing_html}
+                            </div>
+                            </div>
+
+                            <div style="text-align:right;min-width:68px">
+                            <div style="font-family:'Syne',sans-serif;font-size:1.9rem;font-weight:800;color:{sc_color};line-height:1">
+                            {score}
+                            </div>
+                            <div style="font-family:'JetBrains Mono',monospace;font-size:0.63rem;color:#9ca3af">
+                            / 100
+                            </div>
+                            </div>
+                            </div>
+
+                            <div class="score-bar-bg">
+                            <div class="score-bar-fill" style="width:{score}%"></div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                
             # ── CTA to email tab ──
             st.markdown("<br>", unsafe_allow_html=True)
             st.markdown("""
