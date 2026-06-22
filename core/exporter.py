@@ -9,15 +9,26 @@ from openpyxl.utils import get_column_letter
 # EXPORT — EXCEL
 # ──────────────────────────────────────────────────────────────────────────────
 
-def export_excel(df: pd.DataFrame, jd: dict) -> bytes:
+def export_excel(df: pd.DataFrame, jd: dict, col_map: dict = None, score_source: str = None) -> bytes:
     """
     Build a colour-coded Excel workbook with two sheets:
       Sheet 1 — Ranked Candidates (green ≥70 · yellow ≥45 · red <45)
       Sheet 2 — JD Summary
 
+    Args:
+        df:           scored DataFrame from core.scorer.score_candidates()
+        jd:           parsed JD dict
+        col_map:      optional {canonical_field: actual_column_name} mapping
+                       from core.scorer.detect_columns(), used to resolve
+                       name/role/location/experience/skills even when the
+                       uploaded file used different header names.
+        score_source: "gemini" or "offline-rule", shown in the title banner
+                       so the report is honest about how scores were derived.
+
     Returns:
         bytes: Raw .xlsx file content ready for st.download_button.
     """
+    col_map = col_map or {}
     wb = Workbook()
 
     # ── Styles ────────────────────────────────────────────────────────────────
@@ -40,7 +51,11 @@ def export_excel(df: pd.DataFrame, jd: dict) -> bytes:
 
     # Title banner
     ws.merge_cells("A1:M1")
-    ws["A1"] = f"🎯 AI Recruiter — Results for: {jd.get('role', 'Role')}"
+    source_label = {"gemini": "AI-Scored (Gemini)", "offline-rule": "Offline Rule-Based"}.get(score_source, "")
+    title = f"🎯 AI Recruiter — Results for: {jd.get('role', 'Role')}"
+    if source_label:
+        title += f"   ·   {source_label}"
+    ws["A1"] = title
     ws["A1"].font  = Font(bold=True, size=14, color="1E293B", name="Calibri")
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws["A1"].fill  = PatternFill("solid", fgColor="F1F5F9")
@@ -49,9 +64,9 @@ def export_excel(df: pd.DataFrame, jd: dict) -> bytes:
     headers = [
         "Rank", "Name", "Role", "Location", "Experience (yrs)",
         "Skills", "Total Score", "Skill Score", "Role Score",
-        "Exp Score", "Location Match", "Matched Skills", "Missing Skills",
+        "Signal Score", "Matched Skills", "Missing Skills", "Rationale",
     ]
-    col_widths = [6, 22, 22, 14, 16, 32, 13, 13, 12, 12, 16, 30, 30]
+    col_widths = [6, 22, 22, 14, 16, 32, 13, 13, 12, 12, 30, 30, 42]
 
     for col_idx, (h, w) in enumerate(zip(headers, col_widths), start=1):
         cell = ws.cell(row=2, column=col_idx, value=h)
@@ -63,19 +78,25 @@ def export_excel(df: pd.DataFrame, jd: dict) -> bytes:
 
     ws.row_dimensions[2].height = 24
 
-    # Map logical keys → actual df column names (graceful fallback)
+    # Map logical keys → actual df column names (AI col_map first, then
+    # literal key, so this works whether or not the upload matched the
+    # canonical schema exactly).
     key_map = [
         "rank", "name", "role", "location", "experience",
         "skills", "total_score", "skill_score", "role_score",
-        "experience_score", "location_match", "matched_skills", "missing_skills",
+        "signal_score", "matched_skills", "missing_skills", "rationale",
     ]
     df_cols = set(df.columns)
 
     def _get(row, key):
-        return row[key] if key in df_cols else ""
+        actual_col = col_map.get(key, key)
+        if actual_col in df_cols:
+            val = row[actual_col]
+            return "" if pd.isna(val) else val
+        return ""
 
     for r_idx, (_, row) in enumerate(df.iterrows(), start=3):
-        total = _get(row, "total_score")
+        total = _get(row, "total_score") or 0
         row_fill = fill_green if total >= 70 else (fill_yellow if total >= 45 else fill_red)
 
         for c_idx, key in enumerate(key_map, start=1):
@@ -141,10 +162,11 @@ def export_csv(df: pd.DataFrame) -> bytes:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# QUICK SELF-TEST  (run: python filter.py)
+# QUICK SELF-TEST  (run: python -m core.scorer  — exercises scorer + exporter)
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import io as _io
+    from core.scorer import score_candidates
 
     sample_csv = """name,role,location,experience,skills
 Priya Sharma,Data Scientist,Mumbai,4,Python ML SQL Pandas Sklearn
@@ -161,6 +183,7 @@ Arjun Rao,Business Analyst,Delhi,5,Excel SQL Tableau
 
     df_in = pd.read_csv(_io.StringIO(sample_csv))
     df_in.columns = [c.strip().lower().replace(" ", "_") for c in df_in.columns]
-    scored, name_col = score_candidates(df_in, sample_jd)
-    print(scored[["rank", "name", "total_score", "skill_score", "role_score", "experience_score"]].to_string(index=False))
+    scored, name_col, source = score_candidates(df_in, sample_jd, mode="offline")
+    print(f"Scoring source: {source}")
+    print(scored[["rank", "name", "total_score", "skill_score", "role_score", "signal_score"]].to_string(index=False))
     print(f"\nName column detected: {name_col}")

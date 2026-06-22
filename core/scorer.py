@@ -397,119 +397,259 @@ def _skill_match(skill: str, candidate_text: str) -> bool:
 
 def load_candidates(uploaded_file) -> pd.DataFrame:
     """
-    Read a CSV UploadedFile and normalise all column names to lowercase_underscore.
+    Read a candidate file (CSV or Excel) and normalise all column names to
+    lowercase_underscore. Accepts whatever raw columns the file has — no
+    pre-formatting required; AI column mapping (see detect_columns) figures
+    out what's what later.
 
     Returns:
-        pd.DataFrame with normalised columns.
+        pd.DataFrame with normalised column names, original data untouched.
 
     Raises:
-        ValueError: if the file cannot be parsed as CSV.
+        ValueError: if the file extension isn't recognised.
     """
-    df = pd.read_csv(uploaded_file)
-    df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
+    name = getattr(uploaded_file, "name", "").lower()
+    if name.endswith((".xlsx", ".xls")):
+        df = pd.read_excel(uploaded_file)
+    elif name.endswith(".csv"):
+        df = pd.read_csv(uploaded_file)
+    else:
+        # Best-effort: try CSV first, then Excel, rather than hard-failing
+        # on an unrecognised/missing extension.
+        try:
+            df = pd.read_csv(uploaded_file)
+        except Exception:
+            uploaded_file.seek(0)
+            df = pd.read_excel(uploaded_file)
+
+    df.columns = [str(c).strip().lower().replace(" ", "_") for c in df.columns]
     return df
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# SCORE
+# AI-ASSISTED COLUMN DETECTION
 # ──────────────────────────────────────────────────────────────────────────────
 
-def score_candidates(df: pd.DataFrame, jd: dict) -> tuple[pd.DataFrame, str | None]:
+def detect_columns(df: pd.DataFrame, jd: dict = None, api_key: str = None) -> dict:
+    """
+    Map canonical fields (name, role, location, experience, skills, email,
+    company, education) to whatever columns actually exist in the uploaded
+    file. Tries Gemini first (handles messy/unexpected headers — exactly the
+    "I had to hand-build the Excel to match the app" problem); falls back to
+    the static alias table below if no API key or the call fails.
+    """
+    import os as _os
+    key = api_key or _os.getenv("GEMINI_API_KEY")
+    mapping = {}
+
+    if key:
+        try:
+            from services.provider_factory import get_provider
+            provider = get_provider("gemini", key)
+            sample_rows = df.head(3).to_dict(orient="records")
+            mapping = provider.map_candidate_columns(list(df.columns), sample_rows) or {}
+            # Keep only fields that actually exist as columns.
+            mapping = {k: v for k, v in mapping.items() if v in df.columns}
+        except Exception:
+            mapping = {}
+
+    # Fill in anything AI missed using the static alias table.
+    for field in _COL_ALIASES:
+        if field not in mapping:
+            col = _find_col(df, field)
+            if col:
+                mapping[field] = col
+
+    return mapping
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCORE — AI (primary path)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _score_candidates_ai(df: pd.DataFrame, jd: dict, api_key: str) -> pd.DataFrame:
+    """Batch-scores every candidate via Gemini using the FULL row, not just
+    the canonical fields, so any extra signal columns (activity, certs,
+    endorsements, last_active, whatever the dataset happens to include) get
+    weighed in. Raises on failure so the caller can fall back."""
+    from services.provider_factory import get_provider
+    provider = get_provider("gemini", api_key)
+
+    records = []
+    for idx, row in df.iterrows():
+        rec = {k: (None if pd.isna(v) else v) for k, v in row.to_dict().items()}
+        rec["_row_id"] = int(idx)
+        records.append(rec)
+
+    results = provider.score_candidates(jd, records)
+    by_id = {int(r["_row_id"]): r for r in results if "_row_id" in r}
+
+    rows_total, rows_skill, rows_role, rows_signal = [], [], [], []
+    rows_matched, rows_missing, rows_rationale = [], [], []
+    for idx in df.index:
+        r = by_id.get(int(idx), {})
+        skill_sc  = int(r.get("skill_score", 0) or 0)
+        role_sc   = int(r.get("role_score", 0) or 0)
+        signal_sc = int(r.get("signal_score", 0) or 0)
+        total     = int(r.get("total_score", skill_sc + role_sc + signal_sc) or 0)
+        rows_total.append(total)
+        rows_skill.append(skill_sc)
+        rows_role.append(role_sc)
+        rows_signal.append(signal_sc)
+        matched = r.get("matched_skills") or []
+        missing = r.get("missing_skills") or []
+        rows_matched.append(", ".join(matched) if matched else "None")
+        rows_missing.append(", ".join(missing) if missing else "None")
+        rows_rationale.append(r.get("rationale", ""))
+
+    out = df.copy()
+    out["total_score"]    = rows_total
+    out["skill_score"]    = rows_skill
+    out["role_score"]     = rows_role
+    out["signal_score"]   = rows_signal
+    out["matched_skills"] = rows_matched
+    out["missing_skills"] = rows_missing
+    out["rationale"]      = rows_rationale
+    return out
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCORE — Offline rule-based (fallback, no API key needed)
+# ──────────────────────────────────────────────────────────────────────────────
+
+_LOCATION_ALIASES = {
+    "bangalore": "bengaluru", "bengaluru": "bengaluru",
+    "bombay": "mumbai", "mumbai": "mumbai",
+    "gurgaon": "gurugram", "gurugram": "gurugram",
+    "calcutta": "kolkata", "kolkata": "kolkata",
+}
+
+
+def _normalize_location(loc: str) -> str:
+    loc = (loc or "").strip().lower()
+    return _LOCATION_ALIASES.get(loc, loc)
+
+
+def _score_candidates_offline(df: pd.DataFrame, jd: dict, col_map: dict) -> pd.DataFrame:
+    """
+    Deterministic keyword/rule scorer. Used when no Gemini key is available.
+    Fixes the location bug from the original version: previously, if the JD
+    location couldn't be parsed (jd_location == ""), `bool("" and ...)` is
+    always False, so EVERY candidate was marked "No match" regardless of
+    their actual city. Now a missing JD location is treated as "N/A / not
+    specified" rather than a silent fail for every row.
+    """
+    df = df.copy()
+
+    required_skills = [s.lower().strip() for s in jd.get("skills", []) if s]
+    jd_role     = (jd.get("role") or "").lower()
+    jd_location = _normalize_location(jd.get("location") or "")
+    exp_min     = int(jd.get("experience_min") or 0)
+    exp_max     = int(jd.get("experience_max") or 99)
+
+    skills_col   = col_map.get("skills")
+    role_col     = col_map.get("role")
+    location_col = col_map.get("location")
+    exp_col      = col_map.get("experience")
+
+    rows_skill_sc, rows_role_sc, rows_signal_sc = [], [], []
+    rows_loc, rows_matched, rows_missing, rows_total, rows_rationale = [], [], [], [], []
+
+    for _, row in df.iterrows():
+        cand_skills_raw = str(row[skills_col]).lower() if skills_col and pd.notna(row.get(skills_col)) else ""
+        matched = [s for s in required_skills if _skill_match(s, cand_skills_raw)]
+        missing = [s for s in required_skills if not _skill_match(s, cand_skills_raw)]
+        skill_sc = round(len(matched) / max(len(required_skills), 1) * 40)
+
+        cand_role = str(row[role_col]).lower() if role_col and pd.notna(row.get(role_col)) else ""
+        role_sc = _role_match_score(jd_role, cand_role) if (jd_role and cand_role) else 0
+
+        cand_exp = _parse_experience(row[exp_col]) if exp_col and pd.notna(row.get(exp_col)) else 0.0
+        if exp_min <= cand_exp <= exp_max:
+            exp_pts = 20
+        elif cand_exp > exp_max:
+            exp_pts = max(0, 20 - int((cand_exp - exp_max) * 2))
+        else:
+            exp_pts = max(0, 20 - int((exp_min - cand_exp) * 3))
+
+        cand_loc = _normalize_location(str(row[location_col])) if location_col and pd.notna(row.get(location_col)) else ""
+        if not jd_location:
+            loc_label, loc_bonus = "— N/A", 5  # JD had no location: don't penalize anyone
+        elif cand_loc and jd_location in cand_loc:
+            loc_label, loc_bonus = "✅ Yes", 10
+        else:
+            loc_label, loc_bonus = "❌ No", 0
+
+        signal_sc = exp_pts + loc_bonus
+        total = skill_sc + role_sc + signal_sc
+
+        rows_skill_sc.append(skill_sc)
+        rows_role_sc.append(role_sc)
+        rows_signal_sc.append(signal_sc)
+        rows_loc.append(loc_label)
+        rows_matched.append(", ".join(matched) if matched else "None")
+        rows_missing.append(", ".join(missing) if missing else "None")
+        rows_total.append(total)
+        rows_rationale.append(
+            f"Offline rule-based: {len(matched)}/{max(len(required_skills),1)} skills matched, "
+            f"experience {cand_exp:g}y vs required {exp_min}-{exp_max}y."
+        )
+
+    df["total_score"]    = rows_total
+    df["skill_score"]    = rows_skill_sc
+    df["role_score"]     = rows_role_sc
+    df["signal_score"]   = rows_signal_sc
+    df["location_match"] = rows_loc
+    df["matched_skills"] = rows_matched
+    df["missing_skills"] = rows_missing
+    df["rationale"]      = rows_rationale
+    return df
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SCORE — Unified public entry point
+# ──────────────────────────────────────────────────────────────────────────────
+
+def score_candidates(df: pd.DataFrame, jd: dict, api_key: str = None, mode: str = "auto"):
     """
     Score and rank every candidate against the parsed JD.
 
     Args:
-        df:  Candidate DataFrame (normalised columns).
-        jd:  Dict produced by jd_parser.extract_jd_with_ai().
+        df:      Candidate DataFrame (normalised columns).
+        jd:      Dict produced by core.parser.parse_jd_with_ai() / parse_jd().
+        api_key: Gemini API key. If omitted, reads GEMINI_API_KEY from env.
+        mode:    "auto" (Gemini if a key is available, else offline),
+                 "ai" (force Gemini, raises if it fails),
+                 "offline" (force the deterministic rule-based scorer).
 
     Returns:
-        (scored_df, name_col)
-        scored_df  — original DataFrame + score columns, sorted descending by total_score
-        name_col   — detected column name for candidate names (or None)
+        (scored_df, name_col, source)
+        scored_df — original DataFrame + score columns, sorted by total_score
+        name_col  — detected column name for candidate names (or None)
+        source    — "gemini" or "offline-rule", whichever actually ran
     """
-    df = df.copy()
+    import os as _os
+    key = api_key or _os.getenv("GEMINI_API_KEY")
+    col_map = detect_columns(df, jd, api_key=key)
+    name_col = col_map.get("name") or _find_col(df, "name")
 
-    # JD fields
-    required_skills = [s.lower().strip() for s in jd.get("skills", [])]
-    jd_role         = jd.get("role", "").lower()
-    jd_location     = jd.get("location", "").lower()
-    exp_min         = int(jd.get("experience_min", 0) or 0)
-    exp_max         = int(jd.get("experience_max", 99) or 99)
+    source = "offline-rule"
+    scored = None
 
-    # Detect columns
-    skills_col  = _find_col(df, "skills")
-    role_col    = _find_col(df, "role")
-    location_col= _find_col(df, "location")
-    exp_col     = _find_col(df, "experience")
-    name_col    = _find_col(df, "name")
+    if mode in ("auto", "ai") and key:
+        try:
+            scored = _score_candidates_ai(df, jd, key)
+            source = "gemini"
+        except Exception:
+            if mode == "ai":
+                raise
+            scored = None
 
-    rows_skill_sc, rows_role_sc, rows_exp_sc = [], [], []
-    rows_loc, rows_matched, rows_missing, rows_total = [], [], [], []
+    if scored is None:
+        scored = _score_candidates_offline(df, jd, col_map)
+        source = "offline-rule"
 
-    for _, row in df.iterrows():
+    scored = scored.sort_values("total_score", ascending=False).reset_index(drop=True)
+    scored.insert(0, "rank", range(1, len(scored) + 1))
 
-        # ── Skill Score (0–40) ────────────────────────────────────────────────
-        cand_skills_raw = str(row[skills_col]).lower() if skills_col else ""
-        matched = [
-        skill
-        for skill in required_skills
-        if _skill_match(skill, cand_skills_raw)
-        ]
-
-        missing = [
-        skill
-        for skill in required_skills
-        if not _skill_match(skill, cand_skills_raw)
-        ]
-
-        skill_sc = round(
-            len(matched) / max(len(required_skills), 1) * 40
-        )
-
-        # ── Role Score (0–30) ─────────────────────────────────────────────────
-        cand_role = str(row[role_col]).lower() if role_col else ""
-        if jd_role and cand_role:
-            role_sc    = _role_match_score(
-                jd_role,
-                cand_role
-            )
-        else:
-            role_sc = 0
-
-        # ── Experience Score (0–30) ───────────────────────────────────────────
-        cand_exp = _parse_experience(row[exp_col]) if exp_col else 0.0
-        if exp_min <= cand_exp <= exp_max:
-            exp_sc = 30
-        elif cand_exp > exp_max:
-            exp_sc = max(0, 30 - int((cand_exp - exp_max) * 3))
-        else:
-            exp_sc = max(0, 30 - int((exp_min - cand_exp) * 5))
-
-        # ── Location Match (boolean) ──────────────────────────────────────────
-        cand_loc  = str(row[location_col]).lower() if location_col else ""
-        loc_match = bool(jd_location and jd_location in cand_loc)
-
-        total = skill_sc + role_sc + exp_sc
-
-        rows_skill_sc.append(skill_sc)
-        rows_role_sc.append(role_sc)
-        rows_exp_sc.append(exp_sc)
-        rows_loc.append("✅ Yes" if loc_match else "❌ No")
-        rows_matched.append(", ".join(matched) if matched else "None")
-        rows_missing.append(", ".join(missing) if missing else "None")
-        rows_total.append(total)
-
-    df["total_score"]      = rows_total
-    df["skill_score"]      = rows_skill_sc
-    df["role_score"]       = rows_role_sc
-    df["experience_score"] = rows_exp_sc
-    df["location_match"]   = rows_loc
-    df["matched_skills"]   = rows_matched
-    df["missing_skills"]   = rows_missing
-
-    df = df.sort_values("total_score", ascending=False).reset_index(drop=True)
-    df.insert(0, "rank", range(1, len(df) + 1))
-
-    return df, name_col
-
-
+    return scored, name_col, source

@@ -1073,6 +1073,115 @@ def parse_jd_with_llm_fallback(jd_text: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# PRIMARY PATH: GEMINI-POWERED EXTRACTION
+# ──────────────────────────────────────────────────────────────────────────────
+# This is now the DEFAULT entry point the app uses. The regex pipeline above
+# (parse_jd) becomes the offline fallback — used automatically when no
+# GEMINI_API_KEY is configured, or if the Gemini call/parse fails for any
+# reason, so the app never hard-crashes just because a network call failed.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _normalize_ai_fields(data: dict) -> dict:
+    """Coerce an AI-extracted dict into the same shape/types parse_jd() produces."""
+    def _as_int(v):
+        if v is None or v == "":
+            return None
+        try:
+            return int(float(v))
+        except (ValueError, TypeError):
+            return None
+
+    def _as_list(v):
+        if not v:
+            return []
+        if isinstance(v, str):
+            return [v.strip().lower()] if v.strip() else []
+        return [str(s).strip().lower() for s in v if str(s).strip()]
+
+    skills = _as_list(data.get("skills"))
+    must_have = _as_list(data.get("must_have_skills"))
+    nice_to_have = _as_list(data.get("nice_to_have_skills"))
+    # Make sure must-have skills are always represented in the main skills list.
+    for s in must_have:
+        if s not in skills:
+            skills.append(s)
+
+    fields = {
+        "role":                (data.get("role") or "").strip() or None,
+        "company":             (data.get("company") or "").strip() or None,
+        "skills":              skills,
+        "must_have_skills":    must_have,
+        "nice_to_have_skills": nice_to_have,
+        "location":            (data.get("location") or "").strip() or None,
+        "experience_min":      _as_int(data.get("experience_min")),
+        "experience_max":      _as_int(data.get("experience_max")),
+        "employment_type":     (data.get("employment_type") or "").strip() or None,
+        "education":           (data.get("education") or "").strip() or None,
+        "industry":            (data.get("industry") or "").strip() or None,
+        "summary":             (data.get("summary") or "").strip() or None,
+    }
+    if not fields["summary"]:
+        fields["summary"] = build_summary(
+            fields["role"], fields["company"],
+            fields["experience_min"], fields["experience_max"], fields["location"]
+        )
+    return fields
+
+
+def parse_jd_with_ai(jd_text: str, api_key: Optional[str] = None, provider_name: str = "gemini") -> dict:
+    """
+    Primary JD parsing entry point.
+
+    Tries Gemini first (real semantic understanding of the JD — the thing
+    the offline regex pipeline can't do, e.g. telling the hiring company
+    apart from a client mentioned in the JD body). Falls back to the fully
+    offline regex pipeline if no API key is available or the call fails for
+    any reason, so the app keeps working without an internet connection or
+    API key.
+
+    Returns the parsed dict plus a "_source" key: "gemini" or "offline-regex",
+    so the UI can be honest with the user about which path actually ran.
+    """
+    import os as _os
+    key = api_key or _os.getenv("GEMINI_API_KEY")
+
+    if key:
+        try:
+            from services.provider_factory import get_provider
+            provider = get_provider(provider_name, key)
+            raw = provider.extract_jd(jd_text)
+            fields = _normalize_ai_fields(raw)
+            fields["_source"] = "gemini"
+            return fields
+        except Exception as e:
+            fields = parse_jd(jd_text)
+            fields["_source"] = "offline-regex"
+            fields["_ai_error"] = str(e)
+            return fields
+
+    fields = parse_jd(jd_text)
+    fields["_source"] = "offline-regex"
+    return fields
+
+
+def parse_jd_from_upload_with_ai(uploaded_file, api_key: Optional[str] = None) -> tuple[dict, str]:
+    """AI-first counterpart to parse_jd_from_upload(). Returns (parsed_dict, raw_text)."""
+    name = uploaded_file.name.lower()
+    raw_bytes = uploaded_file.read()
+
+    if name.endswith(".pdf"):
+        text = extract_text_from_pdf_bytes(raw_bytes)
+    elif name.endswith(".docx"):
+        text = extract_text_from_docx_bytes(raw_bytes)
+    elif name.endswith(".txt"):
+        text = raw_bytes.decode("utf-8", errors="replace")
+    else:
+        raise ValueError(f"Unsupported file type: {uploaded_file.name}")
+
+    return parse_jd_with_ai(text, api_key=api_key), text
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # CLI
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -1098,3 +1207,86 @@ if __name__ == "__main__":
     with open("parsed_jd.json", "w") as f:
         json.dump(result, f, indent=2)
     print("\n💾 Saved to parsed_jd.json")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PASTE THIS ENTIRE BLOCK AT THE VERY BOTTOM OF YOUR core/parser.py
+# (after the last line of the file — after the if __name__ == "__main__" block)
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _normalize_ai_fields(data: dict) -> dict:
+    def _as_int(v):
+        if v is None or v == "": return None
+        try: return int(float(v))
+        except: return None
+
+    def _as_list(v):
+        if not v: return []
+        if isinstance(v, str): return [v.strip().lower()] if v.strip() else []
+        return [str(s).strip().lower() for s in v if str(s).strip()]
+
+    skills = _as_list(data.get("skills"))
+    must_have = _as_list(data.get("must_have_skills"))
+    for s in must_have:
+        if s not in skills:
+            skills.append(s)
+
+    fields = {
+        "role":                (data.get("role") or "").strip() or None,
+        "company":             (data.get("company") or "").strip() or None,
+        "skills":              skills,
+        "must_have_skills":    must_have,
+        "nice_to_have_skills": _as_list(data.get("nice_to_have_skills")),
+        "location":            (data.get("location") or "").strip() or None,
+        "experience_min":      _as_int(data.get("experience_min")),
+        "experience_max":      _as_int(data.get("experience_max")),
+        "employment_type":     (data.get("employment_type") or "").strip() or None,
+        "education":           (data.get("education") or "").strip() or None,
+        "industry":            (data.get("industry") or "").strip() or None,
+        "summary":             (data.get("summary") or "").strip() or None,
+    }
+    if not fields["summary"]:
+        fields["summary"] = build_summary(
+            fields["role"], fields["company"],
+            fields["experience_min"], fields["experience_max"], fields["location"]
+        )
+    return fields
+
+
+def parse_jd_with_ai(jd_text: str, api_key=None, provider_name: str = "gemini") -> dict:
+    import os as _os
+    key = api_key or _os.getenv("GEMINI_API_KEY")
+
+    if key:
+        try:
+            from services.provider_factory import get_provider
+            provider = get_provider(provider_name, key)
+            raw = provider.extract_jd(jd_text)
+            fields = _normalize_ai_fields(raw)
+            fields["_source"] = "gemini"
+            return fields
+        except Exception as e:
+            fields = parse_jd(jd_text)
+            fields["_source"] = "offline-regex"
+            fields["_ai_error"] = str(e)
+            return fields
+
+    fields = parse_jd(jd_text)
+    fields["_source"] = "offline-regex"
+    return fields
+
+
+def parse_jd_from_upload_with_ai(uploaded_file, api_key=None):
+    name = uploaded_file.name.lower()
+    raw_bytes = uploaded_file.read()
+
+    if name.endswith(".pdf"):
+        text = extract_text_from_pdf_bytes(raw_bytes)
+    elif name.endswith(".docx"):
+        text = extract_text_from_docx_bytes(raw_bytes)
+    elif name.endswith(".txt"):
+        text = raw_bytes.decode("utf-8", errors="replace")
+    else:
+        raise ValueError(f"Unsupported file type: {uploaded_file.name}")
+
+    return parse_jd_with_ai(text, api_key=api_key), text
