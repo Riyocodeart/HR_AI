@@ -3,44 +3,43 @@
 ## Objective:-
 The purpose of this module is to validate, clean, and standardize candidate data before it enters the AI scoring engine. The module should ensure that only reliable candidate profiles are considered for ranking while preserving rejected records for auditing and future review.
 
-# Pipeline Architecture:-
-                candidate_input.json
-                        │
-                        ▼
-          Data Cleaning & Integrity Validation
-                        │
-        ┌───────────────┴────────────────┐
-        │                                │
-        ▼                                ▼
-validated_candidates.json      rejected_candidates.json
-        │                                │
-        ▼                                ▼
- AI Scoring & Ranking Engine      Audit / Logs
-        │
-        ▼
- ranked_candidates.json
+## Pipeline Architecture
 
+```mermaid
+flowchart TD
+    A[candidate_input.json]
+    A --> B[Data Cleaning & Integrity Validation]
+
+    B --> C[validated_candidates.json]
+    B --> D[rejected_candidates.json]
+
+    C --> E[AI Scoring & Ranking Engine]
+    D --> F[Audit / Logs]
+
+    E --> G[ranked_candidates.json]
+```
 
 # Step 1 – Input Validation
 ## Objective:- Ensure the uploaded JSON file is valid before processing.
 
 Validation:-
--JSON file is readable
--JSON syntax is valid
--Required root objects exist
--Arrays are correctly formatted
+
+- JSON file is readable
+- JSON syntax is valid
+- Required root objects exist
+- Arrays are correctly formatted
 
 Required Sections:-
-candidate_id
-profile
-career_history
-education
-skills
-redrob_signals
+- candidate_id
+- profile
+- career_history
+- education
+- skills
+- redrob_signals
 
 Action:- 
--Invalid JSON → Reject record
--Missing mandatory objects → Reject record
+- Invalid JSON → Reject record
+- Missing mandatory objects → Reject record
 
 # Step 2 – Field Validation
 
@@ -49,43 +48,48 @@ Validate the values inside every section.
 ## 1. Profile Validation
 
 Verify:
--Candidate ID exists
--Years of experience is numeric
--Experience is within realistic range
--Current title exists
--Location exists
--Country exists
+
+- Candidate ID exists
+- Years of experience is numeric
+- Experience is within realistic range
+- Current title exists
+- Location exists
+- Country exists
 
 ## 2. Career History Validation
 
 Verify:
--Valid start date
--Valid end date
--Start date ≤ End date
--Only one current job
--Duration is consistent with dates
+
+- Valid start date
+- Valid end date
+- Start date ≤ End date
+- Only one current job
+- Duration is consistent with dates
 
 ## 3. Education Validation
 
 Verify:
--Institution exists
--Degree exists
--Start year < End year
--Graduation year is valid
+
+- Institution exists
+- Degree exists
+- Start year < End year
+- Graduation year is valid
 
 ## 4. Skills Validation
 
 Verify:
--Skill name exists
--Remove duplicate skills
--Ignore empty skill entries
+
+- Skill name exists
+- Remove duplicate skills
+- Ignore empty skill entries
 
 ## 5. Redrob Signals Validation
 
 Verify:
--Required metrics exist
--Numeric fields contain numeric values
--Boolean fields contain valid boolean values
+
+- Required metrics exist
+- Numeric fields contain numeric values
+- Boolean fields contain valid boolean values
 
 # Step 3 – Data Standardization
 Normalize inconsistent values without changing their meaning.
@@ -156,18 +160,20 @@ This approach keeps potentially useful candidates available for manual review wh
 
 Contains candidates that successfully passed the validation pipeline and are ready for AI scoring.
 Example:-
--candidate_id
--profile
--career_history
--education
--skills
--redrob_signals
--data_quality
+
+- candidate_id
+- profile
+- career_history
+- education
+- skills
+- redrob_signals
+- data_quality
 
 Additional metadata:-
--Quality Score
--Status
--Warnings
+
+- Quality Score
+- Status
+- Warnings
 This file becomes the direct input to the AI Scoring Engine.
 
 ## rejected_candidates.json
@@ -175,10 +181,11 @@ This file becomes the direct input to the AI Scoring Engine.
 Contains candidates removed from the ranking process.
 
 Each rejected record should include:
--Candidate ID
--Quality Score
--Rejection Status
--List of validation failures
+
+- Candidate ID
+- Quality Score
+- Rejection Status
+- List of validation failures
 
 Example:-
 Candidate ID
@@ -187,48 +194,35 @@ Status : Rejected
 
 Reasons
 
-• Missing Profile
-• Invalid Experience
-• Corrupted Career History
+- Missing Profile
+- Invalid Experience
+- Corrupted Career History
 
 This file is stored only for audit and debugging purposes.
 
-# Final Pipeline:-
-candidate_input.json
-        │
-        ▼
-────────────────────────────────────
-Data Cleaning & Integrity Validation
-────────────────────────────────────
-        │
-        ▼
-Schema Validation
-        │
-        ▼
-Field Validation
-        │
-        ▼
-Data Standardization
-        │
-        ▼
-Quality Assessment
-        │
-        ▼
-Candidate Classification
-        │
- ┌──────┴───────────────┐
- │                      │
- ▼                      ▼
-validated_candidates    rejected_candidates
-      │
-      ▼
- AI Scoring Engine
-      │
-      ▼
- ranked_candidates.json
+## Final Pipeline
+
+```mermaid
+flowchart TD
+    A[candidate_input.json]
+    A --> B[Data Cleaning & Integrity Validation]
+
+    B --> C[Schema Validation]
+    C --> D[Field Validation]
+    D --> E[Data Standardization]
+    E --> F[Quality Assessment]
+    F --> G[Candidate Classification]
+
+    G --> H[validated_candidates.json]
+    G --> I[rejected_candidates.json]
+
+    H --> J[AI Scoring Engine]
+    J --> K[ranked_candidates.json]
+```
 
 # Design Principles
--Modular: Each stage has a single responsibility, making the pipeline easier to maintain.
--Configurable: Validation rules and penalty weights should be externalized so they can be updated without modifying the pipeline.
--Transparent: Every rejected or flagged candidate should include the reasons for its classification.
--Non-destructive: The original input file remains unchanged. The pipeline generates separate validated and rejected outputs, ensuring traceability and simplifying debugging.
+
+- Modular: Each stage has a single responsibility, making the pipeline easier to maintain.
+- Configurable: Validation rules and penalty weights should be externalized so they can be updated without modifying the pipeline.
+- Transparent: Every rejected or flagged candidate should include the reasons for its classification.
+- Non-destructive: The original input file remains unchanged. The pipeline generates separate validated and rejected outputs, ensuring traceability and simplifying debugging.
