@@ -8,6 +8,9 @@ the API.
 """
 
 DEFAULT_PROVIDER = "gemini"
+GEMINI_API_KEYS_ENV = "GEMINI_API_KEYS"
+GEMINI_API_KEY_ENV = "GEMINI_API_KEY"
+GEMINI_API_KEY_PREFIX = "GEMINI_API_KEY_"
 
 # gemini-2.0-flash was shut down by Google on June 1, 2026 — DO NOT use it.
 # gemini-2.5-flash is the current stable replacement (cheap, fast, good

@@ -25,6 +25,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+from services.key_rotation import load_gemini_api_keys
+
 SKILL_ALIASES = {
 
     # Programming
@@ -438,14 +440,13 @@ def detect_columns(df: pd.DataFrame, jd: dict = None, api_key: str = None) -> di
     "I had to hand-build the Excel to match the app" problem); falls back to
     the static alias table below if no API key or the call fails.
     """
-    import os as _os
-    key = api_key or _os.getenv("GEMINI_API_KEY")
+    keys = load_gemini_api_keys(api_key)
     mapping = {}
 
-    if key:
+    if keys:
         try:
             from services.provider_factory import get_provider
-            provider = get_provider("gemini", key)
+            provider = get_provider("gemini", keys)
             sample_rows = df.head(3).to_dict(orient="records")
             mapping = provider.map_candidate_columns(list(df.columns), sample_rows) or {}
             # Keep only fields that actually exist as columns.
@@ -473,7 +474,7 @@ def _score_candidates_ai(df: pd.DataFrame, jd: dict, api_key: str) -> pd.DataFra
     endorsements, last_active, whatever the dataset happens to include) get
     weighed in. Raises on failure so the caller can fall back."""
     from services.provider_factory import get_provider
-    provider = get_provider("gemini", api_key)
+    provider = get_provider("gemini", load_gemini_api_keys(api_key))
 
     records = []
     for idx, row in df.iterrows():
@@ -628,17 +629,16 @@ def score_candidates(df: pd.DataFrame, jd: dict, api_key: str = None, mode: str 
         name_col  — detected column name for candidate names (or None)
         source    — "gemini" or "offline-rule", whichever actually ran
     """
-    import os as _os
-    key = api_key or _os.getenv("GEMINI_API_KEY")
-    col_map = detect_columns(df, jd, api_key=key)
+    keys = load_gemini_api_keys(api_key)
+    col_map = detect_columns(df, jd, api_key=keys)
     name_col = col_map.get("name") or _find_col(df, "name")
 
     source = "offline-rule"
     scored = None
 
-    if mode in ("auto", "ai") and key:
+    if mode in ("auto", "ai") and keys:
         try:
-            scored = _score_candidates_ai(df, jd, key)
+            scored = _score_candidates_ai(df, jd, keys)
             source = "gemini"
         except Exception:
             if mode == "ai":

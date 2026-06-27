@@ -48,6 +48,7 @@ from core.parser import parse_jd_from_upload, parse_jd, parse_jd_with_ai, parse_
 from core.scorer import load_candidates, score_candidates, detect_columns
 from core.exporter import export_excel, export_csv
 from core.linkedin import generate_linkedin_url, generate_xray_search_url
+from services.key_rotation import load_gemini_api_keys
 
 try:
     from google.auth.transport.requests import Request
@@ -315,8 +316,9 @@ st.markdown("""
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 
-def _gemini_key() -> str | None:
-    return os.getenv("GEMINI_API_KEY") or st.session_state.get("_gemini_api_key")
+def _gemini_keys() -> list[str]:
+    session_keys = st.session_state.get("_gemini_api_keys_input")
+    return load_gemini_api_keys(session_keys)
 
 def get_gmail_service():
     creds = None
@@ -442,16 +444,19 @@ with st.sidebar:
     st.markdown('<div class="sidebar-tagline">AI-Powered Recruiting Suite</div>', unsafe_allow_html=True)
     st.divider()
 
-    # ── Gemini API Key ──
-    st.markdown('<div class="sidebar-section-label">Gemini API Key</div>', unsafe_allow_html=True)
-    env_key = os.getenv("GEMINI_API_KEY", "")
-    if env_key:
-        st.markdown('<span style="color:#10b981;font-size:0.8rem">✓ Key loaded from .env</span>', unsafe_allow_html=True)
-    else:
-        key_input = st.text_input("GEMINI_API_KEY", type="password", placeholder="AIza...", label_visibility="collapsed")
-        if key_input:
-            st.session_state["_gemini_api_key"] = key_input
-            st.markdown('<span style="color:#10b981;font-size:0.78rem">✓ Key saved for this session</span>', unsafe_allow_html=True)
+    # ── Gemini API Keys ──
+    st.markdown('<div class="sidebar-section-label">Gemini API Keys</div>', unsafe_allow_html=True)
+    env_keys = load_gemini_api_keys()
+    if env_keys:
+        st.caption(f"{len(env_keys)} key(s) loaded from environment")
+    key_input = st.text_area(
+        "GEMINI_API_KEYS",
+        value=st.session_state.get("_gemini_api_keys_input", ""),
+        placeholder="Paste one key per line or separate them with commas",
+        height=88,
+        label_visibility="collapsed",
+    )
+    st.session_state["_gemini_api_keys_input"] = key_input
     st.divider()
 
     # ── Navigation ──
@@ -598,7 +603,7 @@ if st.session_state.active_tab == "recruiter":
                 if st.session_state._jd_file_hash != file_hash:
                     with st.spinner("Extracting JD with Gemini AI…"):
                         try:
-                            jd_data, jd_text = parse_jd_from_upload_with_ai(jd_file, api_key=_gemini_key())
+                            jd_data, jd_text = parse_jd_from_upload_with_ai(jd_file, api_key=_gemini_keys())
                             st.session_state.jd_data       = dict(jd_data)
                             st.session_state.jd_text       = jd_text
                             st.session_state.jd_source     = jd_data.get("_source", "offline-regex")
@@ -621,7 +626,7 @@ if st.session_state.active_tab == "recruiter":
             if st.button("⬡  Extract JD Details", width='stretch'):
                 if jd_text_pasted.strip():
                     with st.spinner("Extracting with Gemini AI…"):
-                        jd_data = parse_jd_with_ai(jd_text_pasted, api_key=_gemini_key())
+                        jd_data = parse_jd_with_ai(jd_text_pasted, api_key=_gemini_keys())
                         st.session_state.jd_data      = dict(jd_data)
                         st.session_state.jd_text      = jd_text_pasted
                         st.session_state.jd_source    = jd_data.get("_source","offline-regex")
@@ -725,7 +730,7 @@ if st.session_state.active_tab == "recruiter":
                     st.session_state.candidates_df = df
                     st.success(f"✓ Loaded {len(df)} candidates across {len(df.columns)} columns")
                     # Auto-detect columns so we can show mapping to user
-                    col_map = detect_columns(df, st.session_state.jd_data, api_key=_gemini_key())
+                    col_map = detect_columns(df, st.session_state.jd_data, api_key=_gemini_keys())
                     st.session_state.col_map = col_map
                     if col_map:
                         mapping_str = " · ".join(f"{v} → {k}" for k, v in col_map.items())
@@ -742,7 +747,7 @@ if st.session_state.active_tab == "recruiter":
     if st.session_state.jd_data and st.session_state.candidates_df is not None:
         st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 04</div><div class="step-title">AI Score & Rank Candidates</div>', unsafe_allow_html=True)
         sc1, sc2, sc3 = st.columns(3)
-        key = _gemini_key()
+        keys = _gemini_keys()
         for col, lbl, pts, desc in [
             (sc1, "Skill Match", "40", "Required skills vs. candidate's full profile"),
             (sc2, "Role Match",  "30", "Title / seniority alignment"),
@@ -755,7 +760,7 @@ if st.session_state.active_tab == "recruiter":
               <div style="font-size:0.72rem;color:rgba(255,255,255,0.3);margin-top:0.3rem">{desc}</div>
             </div>""", unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
-        if key:
+        if keys:
             st.markdown('<span class="source-badge">⬡ Gemini AI Scoring</span>', unsafe_allow_html=True)
         else:
             st.markdown('<span class="source-badge offline">⚠ Offline Rule-Based Scoring (add Gemini key for AI)</span>', unsafe_allow_html=True)
@@ -767,7 +772,7 @@ if st.session_state.active_tab == "recruiter":
                     scored, name_col, source = score_candidates(
                         st.session_state.candidates_df,
                         st.session_state.jd_data,
-                        api_key=_gemini_key()
+                        api_key=_gemini_keys()
                     )
                     st.session_state.scored_df         = scored
                     st.session_state.name_col_detected = name_col
@@ -1039,7 +1044,7 @@ elif st.session_state.active_tab == "chatbot":
             with st.spinner("Thinking…"):
                 try:
                     from services.provider_factory import get_provider
-                    provider = get_provider("gemini", _gemini_key())
+                    provider = get_provider("gemini", _gemini_keys())
                     reply = provider.chat(
                         user_msg,
                         context=context,

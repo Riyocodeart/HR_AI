@@ -15,6 +15,11 @@ from google import genai
 
 from services.llm_service import LLMProvider
 from services.config import GEMINI_MODEL, SCORING_BATCH_SIZE
+from services.key_rotation import (
+    KeyRotationState,
+    is_key_exhaustion_error,
+    load_gemini_api_keys,
+)
 
 
 class GeminiExtractionError(Exception):
@@ -66,13 +71,54 @@ def _extract_json_block(text: str):
 class GeminiProvider(LLMProvider):
 
     def __init__(self, api_key, model: str = GEMINI_MODEL):
-        self.client = genai.Client(api_key=api_key)
+        self.api_keys = load_gemini_api_keys(api_key)
+        if not self.api_keys:
+            raise ValueError("No Gemini API keys provided.")
         self.model = model
+        self._pool_id = tuple(self.api_keys)
+
+    def _client_for_key(self, api_key: str):
+        return genai.Client(api_key=api_key)
+
+    def _call_with_rotation(self, operation_name: str, operation):
+        """
+        Try each configured key until one succeeds.
+
+        If Gemini returns a quota / exhaustion error for a key, mark it as
+        exhausted and continue with the next key. Non-quota errors fail fast.
+        """
+        keys = self.api_keys
+        if not keys:
+            raise ValueError("No Gemini API keys configured.")
+
+        start = KeyRotationState.current_index(self._pool_id) % len(keys)
+        last_error = None
+
+        for offset in range(len(keys)):
+            index = (start + offset) % len(keys)
+            api_key = keys[index]
+            try:
+                result = operation(self._client_for_key(api_key))
+                KeyRotationState.mark_success(self._pool_id, index)
+                return result
+            except Exception as exc:
+                if is_key_exhaustion_error(exc):
+                    last_error = exc
+                    KeyRotationState.mark_exhausted(self._pool_id, index)
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(f"{operation_name} failed with no usable Gemini API key.")
 
     def _generate(self, prompt: str) -> str:
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
+        response = self._call_with_rotation(
+            "generate_content",
+            lambda client: client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+            ),
         )
         return response.text
 

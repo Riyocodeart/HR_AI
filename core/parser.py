@@ -19,6 +19,8 @@ import xml.etree.ElementTree as ET
 import io
 from typing import Optional
 
+from services.key_rotation import load_gemini_api_keys
+
 # ══════════════════════════════════════════════════════════════════════════════
 # KNOWLEDGE BASE
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1142,13 +1144,12 @@ def parse_jd_with_ai(jd_text: str, api_key: Optional[str] = None, provider_name:
     Returns the parsed dict plus a "_source" key: "gemini" or "offline-regex",
     so the UI can be honest with the user about which path actually ran.
     """
-    import os as _os
-    key = api_key or _os.getenv("GEMINI_API_KEY")
+    keys = load_gemini_api_keys(api_key)
 
-    if key:
+    if keys:
         try:
             from services.provider_factory import get_provider
-            provider = get_provider(provider_name, key)
+            provider = get_provider(provider_name, keys)
             raw = provider.extract_jd(jd_text)
             fields = _normalize_ai_fields(raw)
             fields["_source"] = "gemini"
@@ -1254,13 +1255,12 @@ def _normalize_ai_fields(data: dict) -> dict:
 
 
 def parse_jd_with_ai(jd_text: str, api_key=None, provider_name: str = "gemini") -> dict:
-    import os as _os
-    key = api_key or _os.getenv("GEMINI_API_KEY")
+    keys = load_gemini_api_keys(api_key)
 
-    if key:
+    if keys:
         try:
             from services.provider_factory import get_provider
-            provider = get_provider(provider_name, key)
+            provider = get_provider(provider_name, keys)
             raw = provider.extract_jd(jd_text)
             fields = _normalize_ai_fields(raw)
             fields["_source"] = "gemini"
