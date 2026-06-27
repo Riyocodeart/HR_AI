@@ -1,0 +1,28 @@
+           Upload JD
+                │
+                ▼
+      Local LLM Parser
+                │
+                ▼
+        Structured JSON
+                │
+                ▼
+         Feature Extractor
+                │
+                ▼
+       Embedding Generator
+                │
+                ▼
+       Semantic Retrieval
+                │
+                ▼
+        Weighted Ranker
+                │
+                ▼
+      Top 100 Candidates
+                │
+                ▼
+      Reasoning Generator
+                │
+                ▼
+         
