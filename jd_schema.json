@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Job Description Schema",
+  "type": "object",
+  "required": [
+    "job_title",
+    "company_name",
+    "department",
+    "employment_type",
+    "work_mode",
+    "location",
+    "experience",
+    "education",
+    "skills",
+    "responsibilities",
+    "tools",
+    "certifications",
+    "soft_skills",
+    "industry",
+    "domain",
+    "salary",
+    "notice_period",
+    "travel_requirement",
+    "shift",
+    "languages",
+    "keywords"
+  ],
+  "properties": {
+    "job_title": {
+      "type": ["string", "null"]
+    },
+    "company_name": {
+      "type": ["string", "null"]
+    },
+    "department": {
+      "type": ["string", "null"]
+    },
+    "employment_type": {
+      "type": ["string", "null"]
+    },
+    "work_mode": {
+      "type": ["string", "null"]
+    },
+    "location": {
+      "type": ["string", "null"]
+    },
+    "experience": {
+      "type": "object",
+      "properties": {
+        "minimum_years": {
+          "type": ["number", "null"]
+        },
+        "maximum_years": {
+          "type": ["number", "null"]
+        }
+      }
+    },
+    "education": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "skills": {
+      "type": "object",
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "preferred": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "responsibilities": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "certifications": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "soft_skills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "industry": {
+      "type": ["string", "null"]
+    },
+    "domain": {
+      "type": ["string", "null"]
+    },
+    "salary": {
+      "type": ["string", "null"]
+    },
+    "notice_period": {
+      "type": ["string", "null"]
+    },
+    "travel_requirement": {
+      "type": ["string", "null"]
+    },
+    "shift": {
+      "type": ["string", "null"]
+    },
+    "languages": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

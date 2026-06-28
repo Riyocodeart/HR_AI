@@ -37,3 +37,24 @@ project/
 │   └── helpers.py
 │
 └── app.py
+
+
+After parser was introduced ----- 
+
+your-project/
+├── app.py                    ← REPLACED
+├── jd_schema.json            ← (your existing file — keep it here so the parser finds it)
+├── parser/                   ← NEW (the offline JD parser module)
+│   ├── __init__.py
+│   ├── cleaner.py
+│   ├── jd_parser.py
+│   ├── json_validator.py
+│   ├── models.py
+│   ├── normalizer.py
+│   ├── prompt_builder.py
+│   ├── utils.py
+│   ├── requirements.txt
+│   └── README.md
+└── ui/                       ← NEW (small UI glue, kept out of app.py)
+    ├── jd_parser_animation.py
+    └── linkedin_tab.py

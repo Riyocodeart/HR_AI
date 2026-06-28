@@ -51,6 +51,18 @@ from core.linkedin import generate_linkedin_url, generate_xray_search_url
 from core.cleaner import DataCleaner
 from services.key_rotation import load_gemini_api_keys
 
+# ─── Offline JD Parser (Qwen 2.5 7B via Ollama) ────────────────────────────────
+from pathlib import Path
+from parser import JDParser, OllamaError
+from ui.jd_parser_animation import (
+    render_parsing_animation,
+    animate_reveal,
+    qwen_to_legacy_shape,
+    gemini_to_qwen_shape,
+    extract_text_from_upload,
+)
+from ui.linkedin_tab import render_linkedin_tab
+
 try:
     from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
@@ -424,9 +436,90 @@ def _score_badge(score):
     return "score-low"
 
 
+# ─── Offline JD Parser helpers ──────────────────────────────────────────────────
+@st.cache_resource
+def _get_jd_parser() -> JDParser:
+    """One JDParser per Streamlit session — avoids re-init on every rerun."""
+    schema_path = Path(__file__).resolve().parent / "jd_schema.json"
+    return JDParser(
+        model="qwen2.5:7b-instruct",
+        host="http://localhost:11434",
+        schema_path=schema_path if schema_path.exists() else None,
+        temperature=0.0,
+        seed=42,
+    )
+
+
+def _parse_jd_chain(jd_text: str, container) -> dict | None:
+    """
+    Three-tier JD parsing chain with the typing animation wrapped around
+    whichever layer succeeds first.
+
+        Layer 1 · Gemini API   (online, fastest if keys are present)
+        Layer 2 · Qwen 2.5 7B  (offline, via local Ollama)
+        Layer 3 · Regex        (offline, deterministic — existing core.parser)
+
+    The chain stops at the first layer that returns a usable result.
+    All three populate both ``st.session_state.jd_data_full`` (rich Qwen
+    shape — for the LinkedIn tab) and the returned legacy-shape dict
+    (for the existing scorer / chatbot / email generator).
+
+    Returns
+    -------
+    dict | None
+        Legacy-shape JD on success, ``None`` if every layer failed.
+    """
+
+    def _finalize(legacy: dict, rich: dict, engine_label: str) -> dict:
+        """Common tail: stash full shape, run the typing animation, return legacy."""
+        st.session_state.jd_data_full = rich
+        animate_reveal(rich, container=container, engine_label=engine_label)
+        return legacy
+
+    # ── Layer 1: Gemini ────────────────────────────────────────────────────
+    keys = _gemini_keys()
+    if keys:
+        try:
+            gemini_jd = parse_jd_with_ai(jd_text, api_key=keys)
+            gemini_dict = dict(gemini_jd or {})
+            if gemini_dict.get("_source") == "gemini":
+                gemini_dict["_source"] = "gemini"
+                rich = gemini_to_qwen_shape(gemini_dict)
+                return _finalize(gemini_dict, rich, "Gemini · cloud extraction")
+            # Gemini call returned but its internal regex fallback fired —
+            # fall through to Qwen rather than accept the regex result yet.
+        except Exception as exc:  # noqa: BLE001 — log + fall through
+            container.warning(f"Gemini failed ({exc}) — trying offline Qwen…")
+
+    # ── Layer 2: Qwen 2.5 7B (offline) ─────────────────────────────────────
+    try:
+        # render_parsing_animation does parse + animation in one shot.
+        qwen_dict = render_parsing_animation(_get_jd_parser(), jd_text, container=container)
+        st.session_state.jd_data_full = qwen_dict
+        legacy = qwen_to_legacy_shape(qwen_dict)
+        legacy["_source"] = "qwen-offline"
+        return legacy
+    except OllamaError as exc:
+        container.warning(f"Ollama unreachable ({exc}) — falling back to regex…")
+    except Exception as exc:  # noqa: BLE001
+        container.warning(f"Qwen parsing error ({exc}) — falling back to regex…")
+
+    # ── Layer 3: Regex (offline, your existing core.parser) ────────────────
+    try:
+        regex_jd = parse_jd(jd_text)
+        regex_dict = dict(regex_jd or {})
+        regex_dict["_source"] = "offline-regex"
+        rich = gemini_to_qwen_shape(regex_dict)
+        return _finalize(regex_dict, rich, "Offline · regex extraction")
+    except Exception as exc:  # noqa: BLE001
+        container.error(f"All JD parsing layers failed: {exc}")
+        return None
+
+
 # ─── Session State Defaults ─────────────────────────────────────────────────────
 defaults = {
     "jd_data": None, "jd_text": None, "jd_source": None,
+    "jd_data_full": None,
     "candidates_df": None, "scored_df": None, "score_source": None,
     "col_map": {}, "name_col_detected": None,
     "linkedin_url": None, "xray_url": None,
@@ -464,6 +557,7 @@ with st.sidebar:
     st.markdown('<div class="sidebar-section-label">Navigation</div>', unsafe_allow_html=True)
     tabs_cfg = [
         ("recruiter",  "⬡",  "Recruiter"),
+        ("linkedin",   "in", "LinkedIn"),
         ("analytics",  "📊", "Analytics"),
         ("chatbot",    "💬", "AI Chatbot"),
         ("email",      "✉",  "Email"),
@@ -490,11 +584,10 @@ with st.sidebar:
         st.markdown('<div class="sidebar-section-label">Pipeline Steps</div>', unsafe_allow_html=True)
         for num, title, sub in [
             ("01", "Upload Job Description",  "PDF · DOCX · TXT"),
-            ("02", "Extract Requirements",    "Gemini AI parsing"),
-            ("03", "LinkedIn Search Links",   "Company-targeted URLs"),
-            ("04", "Upload Candidates",       "CSV or Excel — any columns"),
-            ("05", "AI Score & Rank",         "Holistic Gemini scoring"),
-            ("06", "Export Results",          "Auto-generated Excel report"),
+            ("02", "Extract Requirements",    "Gemini → Qwen → Regex"),
+            ("03", "Upload Candidates",       "CSV or Excel — any columns"),
+            ("04", "AI Score & Rank",         "Holistic scoring"),
+            ("05", "Export Results",          "Auto-generated Excel report"),
         ]:
             st.markdown(f"""
             <div class="sidebar-step">
@@ -505,6 +598,17 @@ with st.sidebar:
                 </div>
             </div>""", unsafe_allow_html=True)
         st.divider()
+        if st.session_state.jd_data:
+            st.markdown(
+                '<div style="background:rgba(10,102,194,0.08);border:1px solid rgba(10,102,194,0.22);'
+                'border-radius:8px;padding:0.6rem 0.85rem;margin-bottom:0.6rem">'
+                '<div style="font-family:\'JetBrains Mono\',monospace;font-size:0.6rem;'
+                'letter-spacing:0.12em;text-transform:uppercase;color:#60a5fa">'
+                '→ LinkedIn tab</div>'
+                '<div style="font-size:0.78rem;color:rgba(255,255,255,0.55);margin-top:0.2rem">'
+                'Generate Boolean / X-ray search queries</div></div>',
+                unsafe_allow_html=True,
+            )
         if st.session_state.scored_df is not None:
             n = len(st.session_state.scored_df)
             src = st.session_state.get("score_source", "")
@@ -523,6 +627,28 @@ with st.sidebar:
             if st.button("✉  Email Outreach →", width='stretch'):
                 st.session_state.active_tab = "email"
                 st.rerun()
+
+    elif active == "linkedin":
+        st.markdown('<div class="sidebar-section-label">LinkedIn Search</div>', unsafe_allow_html=True)
+        if st.session_state.jd_data_full is None:
+            st.markdown(
+                '<span style="font-size:0.78rem;color:rgba(255,255,255,0.40)">'
+                'Parse a JD in the Recruiter tab to generate searches.</span>',
+                unsafe_allow_html=True,
+            )
+        else:
+            jd = st.session_state.jd_data_full
+            st.markdown(
+                f'<div style="font-size:0.82rem;color:rgba(255,255,255,0.65);line-height:1.7">'
+                f'<strong style="color:#fff">{jd.get("job_title") or "—"}</strong><br>'
+                f'<span style="color:#9ca3af">{jd.get("company_name") or "—"}</span><br>'
+                f'<span style="color:#6b7280">{jd.get("location") or "—"}</span>'
+                f'</div>', unsafe_allow_html=True,
+            )
+        st.divider()
+        if st.button("⬡  Back to Recruiter ←", width='stretch', key="li_back"):
+            st.session_state.active_tab = "recruiter"
+            st.rerun()
 
     elif active == "analytics":
         st.markdown('<div class="sidebar-section-label">Analytics</div>', unsafe_allow_html=True)
@@ -594,6 +720,11 @@ if st.session_state.active_tab == "recruiter":
     # ── STEP 1: Upload JD ──────────────────────────────────────────────────────
     st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 01</div><div class="step-title">Upload Job Description</div>', unsafe_allow_html=True)
     jd_col1, jd_col2 = st.columns([1, 1], gap="large")
+
+    # Capture what (if anything) needs parsing this rerun.
+    jd_text_to_parse: str | None = None
+    file_hash_to_set: str | None = None
+
     with jd_col1:
         upload_mode = st.radio("Input method", ["Upload File (PDF / DOCX / TXT)", "Paste text"], horizontal=True)
         if upload_mode == "Upload File (PDF / DOCX / TXT)":
@@ -602,38 +733,21 @@ if st.session_state.active_tab == "recruiter":
                 import hashlib
                 file_hash = hashlib.md5(jd_file.getvalue()).hexdigest()
                 if st.session_state._jd_file_hash != file_hash:
-                    with st.spinner("Extracting JD with Gemini AI…"):
-                        try:
-                            jd_data, jd_text = parse_jd_from_upload_with_ai(jd_file, api_key=_gemini_keys())
-                            st.session_state.jd_data       = dict(jd_data)
-                            st.session_state.jd_text       = jd_text
-                            st.session_state.jd_source     = jd_data.get("_source", "offline-regex")
-                            st.session_state.linkedin_url  = generate_linkedin_url(jd_data)
-                            st.session_state.xray_url      = generate_xray_search_url(jd_data)
-                            st.session_state._jd_file_hash = file_hash
-                            src = jd_data.get("_source", "offline-regex")
-                            if src == "gemini":
-                                st.success(f"✓ Parsed with Gemini AI — {len(jd_text):,} chars extracted")
-                            else:
-                                st.warning(f"⚠ Offline parsing used (no API key or Gemini error). Fields may be less accurate.")
-                            if err := jd_data.get("_ai_error"):
-                                st.caption(f"AI error: {err}")
-                        except Exception as e:
-                            st.error(f"Could not parse file: {e}")
+                    extracted = extract_text_from_upload(jd_file)
+                    if not extracted.strip():
+                        st.error("Could not extract any text from this file.")
+                    else:
+                        jd_text_to_parse = extracted
+                        file_hash_to_set = file_hash
         else:
-            jd_text_pasted = st.text_area("Paste JD text here", height=200,
+            jd_text_pasted = st.text_area(
+                "Paste JD text here", height=200,
                 placeholder="Role: Data Scientist\nCompany: Acme Corp\nSkills: Python, ML, SQL\nLocation: Mumbai\nExperience: 3-5 years...",
-                label_visibility="collapsed")
+                label_visibility="collapsed",
+            )
             if st.button("⬡  Extract JD Details", width='stretch'):
                 if jd_text_pasted.strip():
-                    with st.spinner("Extracting with Gemini AI…"):
-                        jd_data = parse_jd_with_ai(jd_text_pasted, api_key=_gemini_keys())
-                        st.session_state.jd_data      = dict(jd_data)
-                        st.session_state.jd_text      = jd_text_pasted
-                        st.session_state.jd_source    = jd_data.get("_source","offline-regex")
-                        st.session_state.linkedin_url = generate_linkedin_url(jd_data)
-                        st.session_state.xray_url     = generate_xray_search_url(jd_data)
-                        st.rerun()
+                    jd_text_to_parse = jd_text_pasted
 
         if st.session_state.jd_data:
             with st.expander("✏ Manually correct extracted fields", expanded=False):
@@ -654,12 +768,30 @@ if st.session_state.active_tab == "recruiter":
                     st.success("✓ Saved.")
                     st.rerun()
 
-    with jd_col2:
-        jd = st.session_state.jd_data
-        if jd:
-            src = st.session_state.jd_source or "offline-regex"
-            badge_cls = "source-badge" if src == "gemini" else "source-badge offline"
-            src_label = "✓ Gemini AI Extracted" if src == "gemini" else "⚠ Offline Regex Extracted"
+    # ── Right column: animate on fresh parse, static otherwise, empty if neither
+    if jd_text_to_parse:
+        # Three-tier chain: Gemini → Qwen → regex. Animation wraps the winner.
+        legacy = _parse_jd_chain(jd_text_to_parse, jd_col2)
+
+        if legacy:
+            st.session_state.jd_data       = legacy
+            st.session_state.jd_text       = jd_text_to_parse
+            st.session_state.jd_source     = legacy.get("_source", "qwen-offline")
+            st.session_state.linkedin_url  = generate_linkedin_url(legacy)
+            st.session_state.xray_url      = generate_xray_search_url(legacy)
+            if file_hash_to_set:
+                st.session_state._jd_file_hash = file_hash_to_set
+
+    elif st.session_state.jd_data:
+        with jd_col2:
+            jd = st.session_state.jd_data
+            src = st.session_state.jd_source or "qwen-offline"
+            badge_cls = "source-badge" if src in ("gemini", "qwen-offline") else "source-badge offline"
+            src_label = {
+                "gemini":           "✓ Gemini AI Extracted",
+                "qwen-offline":     "✓ Qwen 2.5 · Offline",
+                "offline-regex":    "⚠ Offline Regex Extracted",
+            }.get(src, src)
             st.markdown(f'<div style="margin-bottom:0.75rem"><span class="{badge_cls}">{src_label}</span></div>', unsafe_allow_html=True)
             for label, value in [
                 ("Role", jd.get("role","—")), ("Company", jd.get("company","—")),
@@ -675,7 +807,8 @@ if st.session_state.active_tab == "recruiter":
                 st.markdown("".join(f'<span class="tag tag-jd">{s}</span>' for s in skills), unsafe_allow_html=True)
             if jd.get("summary"):
                 st.markdown(f'<div style="margin-top:0.75rem;background:#f5f3ff;border:1px solid #ede9fe;border-radius:10px;padding:0.75rem 1rem;font-size:0.88rem;color:#374151">📝 {jd["summary"]}</div>', unsafe_allow_html=True)
-        else:
+    else:
+        with jd_col2:
             st.markdown("""
             <div style="border:1.5px dashed rgba(124,58,237,0.25);border-radius:14px;
                         padding:3rem 2rem;text-align:center;color:rgba(255,255,255,0.15)">
@@ -686,41 +819,11 @@ if st.session_state.active_tab == "recruiter":
             </div>""", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── STEP 2: LinkedIn URLs ───────────────────────────────────────────────────
-    if st.session_state.jd_data and st.session_state.linkedin_url:
-        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 02</div><div class="step-title">LinkedIn People Search</div>', unsafe_allow_html=True)
-        jd  = st.session_state.jd_data
-        url = st.session_state.linkedin_url
-        xray = st.session_state.xray_url
+    # LinkedIn search now lives in its own tab — see the sidebar.
 
-        li_c1, li_c2 = st.columns([3, 1], gap="large")
-        with li_c1:
-            st.markdown(f'<div class="linkedin-card"><div class="li-label">⬡ LinkedIn Search — targets "{jd.get("company","?")}" employees</div><div class="li-url">{url}</div></div>', unsafe_allow_html=True)
-            st.markdown("<br>", unsafe_allow_html=True)
-            if xray:
-                st.markdown(f'<div class="linkedin-card" style="margin-top:0.5rem"><div class="li-label">🔍 Google X-ray Search — more precise company filtering</div><div class="li-url">{xray}</div></div>', unsafe_allow_html=True)
-        with li_c2:
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.link_button("→ Open on LinkedIn", url, width='stretch')
-            if xray:
-                st.markdown("<br>", unsafe_allow_html=True)
-                st.link_button("→ Open X-ray (Google)", xray, width='stretch')
-            company = jd.get("company","—")
-            role = jd.get("role","—")
-            st.markdown(f"""
-            <div style="font-family:'JetBrains Mono',monospace;font-size:0.68rem;color:#374151;
-                        letter-spacing:0.04em;line-height:2.2;margin-top:0.75rem">
-              <div style="color:var(--purple);text-transform:uppercase;letter-spacing:0.15em;font-size:0.6rem;margin-bottom:0.3rem;font-weight:600">Targeting</div>
-              <div>Company · <strong>{company}</strong></div>
-              <div>Role · <strong>{role}</strong></div>
-            </div>""", unsafe_allow_html=True)
-        st.markdown("<br>", unsafe_allow_html=True)
-        st.caption("💡 LinkedIn URL includes your target company in quoted keywords. The Google X-ray URL uses site:linkedin.com/in filtering — generally more accurate for company-specific results.")
-        st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── STEP 3: Upload Candidates ───────────────────────────────────────────────
+    # ── STEP 2: Upload Candidates ───────────────────────────────────────────────
     if st.session_state.jd_data:
-        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 03</div><div class="step-title">Upload Candidate Dataset</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 02</div><div class="step-title">Upload Candidate Dataset</div>', unsafe_allow_html=True)
         c1, c2 = st.columns([1, 1], gap="large")
         with c1:
             st.caption("CSV or Excel (.xlsx) — any column names. AI maps them automatically.")
@@ -747,9 +850,9 @@ if st.session_state.active_tab == "recruiter":
                 st.dataframe(st.session_state.candidates_df.head(), use_container_width=True, height=220)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── STEP 4: Score ───────────────────────────────────────────────────────────
+    # ── STEP 3: Score ───────────────────────────────────────────────────────────
     if st.session_state.jd_data and st.session_state.candidates_df is not None:
-        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 04</div><div class="step-title">AI Score & Rank Candidates</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 03</div><div class="step-title">AI Score & Rank Candidates</div>', unsafe_allow_html=True)
         sc1, sc2, sc3 = st.columns(3)
         keys = _gemini_keys()
         for col, lbl, pts, desc in [
@@ -849,9 +952,9 @@ if st.session_state.active_tab == "recruiter":
 
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # ── STEP 5: Export ─────────────────────────────────────────────────────────
+    # ── STEP 4: Export ─────────────────────────────────────────────────────────
     if st.session_state.scored_df is not None:
-        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 05</div><div class="step-title">Export Results</div>', unsafe_allow_html=True)
+        st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 04</div><div class="step-title">Export Results</div>', unsafe_allow_html=True)
         col1, col2 = st.columns([1, 2], gap="large")
         with col1:
             excel_bytes = export_excel(
@@ -881,6 +984,13 @@ if st.session_state.active_tab == "recruiter":
               </div>
             </div>""", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TAB: LINKEDIN SEARCH QUERY
+# ══════════════════════════════════════════════════════════════════════════════
+elif st.session_state.active_tab == "linkedin":
+    render_linkedin_tab(st.session_state.jd_data_full)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

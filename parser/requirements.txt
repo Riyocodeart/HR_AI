@@ -1,0 +1,14 @@
+# JD Parser — runtime requirements
+# Compatible with the rest of the Redrob pipeline (Python 3.11).
+
+pydantic>=2.6,<3
+jsonschema>=4.21,<5
+ollama>=0.3.0          # Optional — module falls back to plain `requests` if missing
+requests>=2.31         # Used for the HTTP fallback to the Ollama daemon
+
+# Optional — only needed if you use parser.utils.read_text_file on these formats:
+python-docx>=1.1.0     # .docx JDs
+pypdf>=4.0             # .pdf JDs
+
+# UI helpers (only needed if you import ui.jd_parser_animation / ui.linkedin_tab):
+streamlit>=1.32
