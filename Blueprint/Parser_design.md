@@ -36,3 +36,78 @@
                                  │
                                  ▼
                        Ranking Model Input
+
+                       
+
+                       WORKFLOW
+START
+
+   │
+   ▼
+
+Open candidates.jsonl
+
+   │
+   ▼
+
+Read one line
+
+   │
+   ▼
+
+json.loads(line)
+
+   │
+   ▼
+
+Validate JSON
+
+   │
+   ├──────── Invalid
+   │            │
+   │            ▼
+   │      Log Error
+   │
+   ▼
+
+Extract Profile
+
+   │
+   ▼
+
+Extract Career History
+
+   │
+   ▼
+
+Extract Education
+
+   │
+   ▼
+
+Extract Skills
+
+   │
+   ▼
+
+Extract Redrob Signals
+
+   │
+   ▼
+
+Create Candidate Object
+
+   │
+   ▼
+
+Return Candidate
+
+   │
+   ▼
+
+Repeat Until EOF
+
+   │
+   ▼
+
+END
