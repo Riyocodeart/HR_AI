@@ -48,6 +48,7 @@ from core.parser import parse_jd_from_upload, parse_jd, parse_jd_with_ai, parse_
 from core.scorer import load_candidates, score_candidates, detect_columns
 from core.exporter import export_excel, export_csv
 from core.linkedin import generate_linkedin_url, generate_xray_search_url
+from core.cleaner import DataCleaner
 from services.key_rotation import load_gemini_api_keys
 
 try:
@@ -726,7 +727,10 @@ if st.session_state.active_tab == "recruiter":
             cand_file = st.file_uploader("Candidate file", type=["csv","xlsx","xls"], label_visibility="collapsed")
             if cand_file:
                 try:
+                    cleaner = DataCleaner()
                     df = load_candidates(cand_file)
+                    df = cleaner.clean(df)
+                    st.write(df[df["name"] == "Arvind"][["experience", "quality_score", "warnings", "status"]])
                     st.session_state.candidates_df = df
                     st.success(f"✓ Loaded {len(df)} candidates across {len(df.columns)} columns")
                     # Auto-detect columns so we can show mapping to user
