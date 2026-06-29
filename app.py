@@ -728,8 +728,8 @@ if st.session_state.active_tab == "recruiter":
             if cand_file:
                 try:
                     cleaner = DataCleaner()
-                    df = load_candidates(cand_file)
-                    df = cleaner.clean(df)
+                    #df = load_candidates(cand_file)
+                    #df = cleaner.clean(df)
                     st.write(df[df["name"] == "Arvind"][["experience", "quality_score", "warnings", "status"]])
                     st.session_state.candidates_df = df
                     st.success(f"✓ Loaded {len(df)} candidates across {len(df.columns)} columns")

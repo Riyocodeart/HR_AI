@@ -1,3 +1,5 @@
+import json
+
 class DataCleaner:
     
     PENALTIES = {
@@ -7,230 +9,284 @@ class DataCleaner:
     "missing_skills": 25,
     "missing_company": 5,
     "missing_education": 10,
-    "invalid_email": 10,
+    "invalid_email":10,
     "invalid_experience": 20,
     }
     ACCEPTED_SCORE = 80
     REVIEW_SCORE = 50
 
-    def clean(self, df):
-        df["quality_score"] = 100
-        df["warnings"] = ""
+    location_map = {
+
+    # Bengaluru
+    "Bangalore": "Bengaluru, Karnataka",
+    "Bangalore, Karnataka": "Bengaluru, Karnataka",
+    "Bengaluru": "Bengaluru, Karnataka",
+
+    # Mumbai
+    "Bombay": "Mumbai, Maharashtra",
+    "Mumbai": "Mumbai, Maharashtra",
+    "Mumbai, India": "Mumbai, Maharashtra",
+
+    # Delhi
+    "Delhi": "Delhi, Delhi",
+    "New Delhi": "Delhi, Delhi",
+
+    # Gurugram
+    "Gurgaon": "Gurugram, Haryana",
+    "Gurgaon, Haryana": "Gurugram, Haryana",
+
+    # Hyderabad
+    "Hyderabad": "Hyderabad, Telangana",
+
+    # Chennai
+    "Madras": "Chennai, Tamil Nadu",
+    "Chennai": "Chennai, Tamil Nadu",
+
+    # Kolkata
+    "Calcutta": "Kolkata, West Bengal",
+    "Kolkata": "Kolkata, West Bengal",
+
+    # Pune
+    "Pune": "Pune, Maharashtra",
+
+    # Ahmedabad
+    "Ahmedabad": "Ahmedabad, Gujarat",
+
+    # Jaipur
+    "Jaipur": "Jaipur, Rajasthan",
+
+    # Noida
+    "Noida": "Noida, Uttar Pradesh",
+
+    # Chandigarh
+    "Chandigarh": "Chandigarh, Chandigarh",
+
+    # Kochi
+    "Cochin": "Kochi, Kerala",
+    "Kochi": "Kochi, Kerala",
+
+    # Trivandrum
+    "Trivandrum": "Thiruvananthapuram, Kerala",
+
+    # Vizag
+    "Vizag": "Visakhapatnam, Andhra Pradesh",
+
+    # Indore
+    "Indore": "Indore, Madhya Pradesh",
+
+    # Coimbatore
+    "Coimbatore": "Coimbatore, Tamil Nadu",
+
+    # Bhubaneswar
+    "Bhubaneswar": "Bhubaneswar, Odisha",
+
+    # International
+    "New York": "New York",
+    "San Francisco": "San Francisco",
+    "Seattle": "Seattle",
+    "Austin": "Austin",
+    "Toronto": "Toronto",
+    "London": "London",
+    "Berlin": "Berlin",
+    "Singapore": "Singapore",
+    "Sydney": "Sydney",
+    "Dubai": "Dubai"
+}
         
-        df = self.standardize_names(df)
-        df = self.standardize_roles(df)
-        df = self.standardize_locations(df)
-        df = self.standardize_skills(df)
-        df = self.standardize_companies(df)
-        df = self.standardize_education(df)
-        df = self.standardize_emails(df)
-        df = self.standardize_experience(df)
 
-        df = self.validate_names(df)
-        df = self.validate_roles(df)
-        df = self.validate_locations(df)
-        df = self.validate_skills(df)
-        df = self.validate_companies(df)
-        df = self.validate_education(df)
-        df = self.validate_emails(df)
-        df = self.validate_experience(df)
+    def clean_jsonl(self, input_file, output_file):
 
-        df=self.classify_candidates(df)
+        with open(input_file, "r", encoding="utf-8") as infile, \
+        open(output_file, "w", encoding="utf-8") as outfile:
+            
+            for line in infile:
+                candidate = json.loads(line)
 
+                candidate = self.clean_candidate(candidate)
+                outfile.write(json.dumps(candidate, ensure_ascii=False) + "\n")
+
+    def clean_candidate(self, candidate):
+        candidate["quality_score"] = 100
+        candidate["warnings"] = []
         
+        candidate = self.standardize_names(candidate)
+        candidate = self.standardize_roles(candidate)
+        candidate = self.standardize_locations(candidate)
+        candidate = self.standardize_skills(candidate)
+        candidate = self.standardize_companies(candidate)
+        candidate = self.standardize_education(candidate)
+        candidate = self.validate_email(candidate)
+        candidate = self.standardize_experience(candidate)
+
+        candidate = self.validate_names(candidate)
+        candidate = self.validate_roles(candidate)
+        candidate = self.validate_locations(candidate)
+        candidate = self.validate_skills(candidate)
+        candidate = self.validate_companies(candidate)
+        candidate = self.validate_education(candidate)
+        candidate = self.validate_experience(candidate)
+
+        candidate=self.classify_candidate(candidate)
+        candidate["warnings"] = "; ".join(candidate["warnings"])    
+        return candidate
+        
+    def standardize_names(self, candidate):
+
+        candidate["profile"]["anonymized_name"] = (
+            str(candidate.get("profile", {}).get("anonymized_name", ""))
+            .strip()
+            .title()
+        )
+        return candidate
+
+    def standardize_roles(self, candidate):
+
+        candidate["profile"]["current_title"] = (
+            str(candidate.get("profile", {}).get("current_title", ""))
+            .strip()
+            .title()
+        )
+        return candidate
+
+    def standardize_locations(self, candidate):
+
+        location = (
+              str(candidate.get("profile", {}).get("location", ""))
+            .strip()
+            .title()
+        )
+        candidate["profile"]["location"] = self.location_map.get(location, location)
+
+        return candidate
     
-        return df
-        
-    def standardize_names(self, df):
+    def standardize_skills(self, candidate):
 
-        df["name"] = (
-            df["name"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.title()
-        )
+        for skill in candidate.get("skills", []):
+            skill["name"] = skill.get("name", "").strip().lower()
 
-        return df
-
-    def standardize_roles(self, df):
-
-        df["role"] = (
-            df["role"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.title()
-        )
-
-        return df
-
-    def standardize_locations(self, df):
-
-        location_map = {
-            "Bombay": "Mumbai",
-            "Mumbai, India": "Mumbai",
-            "Bangalore": "Bengaluru"
-        }
-
-        df["location"] = (
-            df["location"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .replace(location_map)
-        )
-
-        return df
-
-    def standardize_skills(self, df):
-
-        df["skills"] = (
-            df["skills"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
-
-        return df
-
-    def standardize_companies(self, df):
-
-        df["company"] = (
-            df["company"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.title()
-        )
-
-        return df
-
-    def standardize_education(self, df):
-
-        df["education"] = (
-            df["education"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.title()
-        )
-
-        return df
-
-    def standardize_emails(self, df):
-
-        df["email"] = (
-            df["email"]
-            .fillna("")
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
-
-        return df
-
-    def standardize_experience(self, df):
-
-        df["experience"] = (
-            df["experience"]
-            .fillna(0)
-            .astype(float)
-        )
-
-        return df
-
-    def validate_names(self, df):
-
-        mask = df["name"].isna() | (df["name"].str.strip() == "")
+        return candidate
     
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_name"]
+    def standardize_companies(self, candidate):
 
-        df.loc[mask, "warnings"] += "Missing Name; "
+        candidate["profile"]["current_company"] = (
+            str(candidate.get("profile", {}).get("current_company", ""))
+            .strip()
+            .title()
+        )
+        return candidate
 
-        return df
+    def standardize_education(self, candidate):
 
-    def validate_roles(self, df):
+        for edu in candidate.get("education", []):
+            edu["institution"] = edu.get("institution", "").strip().title()
+            edu["degree"] = edu.get("degree", "").strip().title()
 
-        mask = df["role"].isna() | (df["role"].str.strip() == "")
+        return candidate
 
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_role"]
+    
+    def standardize_experience(self, candidate):
 
-        df.loc[mask, "warnings"] += "Missing Role; "
+        try:
+            candidate["profile"]["years_of_experience"] = float(
+                candidate.get("profile", {}).get("years_of_experience", 0)
+                )
+            
+        except (ValueError, TypeError):
+            candidate["profile"]["years_of_experience"] = 0
 
-        return df
+        return candidate
+    
+    def validate_names(self, candidate):
 
-    def validate_locations(self, df):
+        if not candidate.get("profile", {}).get("anonymized_name", "").strip():
 
-        mask = df["location"].isna() | (df["location"].str.strip() == "")
+            candidate["quality_score"] -= self.PENALTIES["missing_name"]
 
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_location"]
+            candidate["warnings"].append("Missing Name")
 
-        df.loc[mask, "warnings"] += "Missing Location; "
+        return candidate
 
-        return df
+    def validate_roles(self, candidate):
 
-    def validate_skills(self, df):
+        if not candidate.get("profile", {}).get("current_title", "").strip():
 
-        mask = df["skills"].isna() | (df["skills"].str.strip() == "")
+            candidate["quality_score"] -= self.PENALTIES["missing_role"]
 
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_skills"]
+            candidate["warnings"].append("Missing Role")
 
-        df.loc[mask, "warnings"] += "Missing Skills; "
+        return candidate
 
-        return df
+    def validate_locations(self, candidate):
 
-    def validate_companies(self, df):
+        if not candidate.get("profile", {}).get("location", "").strip():
 
-        mask = df["company"].isna() | (df["company"].str.strip() == "")
+            candidate["quality_score"] -= self.PENALTIES["missing_location"]
+            
+            candidate["warnings"].append("Missing Location")
 
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_company"]
-
-        df.loc[mask, "warnings"] += "Missing Company; "
-
-        return df
-
-    def validate_education(self, df):
-
-        mask = df["education"].isna() | (df["education"].str.strip() == "")
-
-        df.loc[mask, "quality_score"] -= self.PENALTIES["missing_education"]
-
-        df.loc[mask, "warnings"] += "Missing Education; "
-
-        return df
-
-    def validate_emails(self, df):
-
-        mask = (
-            df["email"].isna()
-        |   (df["email"].str.strip() == "")
-        |   (~df["email"].str.contains("@", na=False))
-        )   
-
-        df.loc[mask, "quality_score"] -= self.PENALTIES["invalid_email"]
-
-        df.loc[mask, "warnings"] += "Invalid Email; "
-
-        return df
-
-    def validate_experience(self, df):
-
-        mask = (df["experience"] < 0) | (df["experience"] > 50)
-
-        df.loc[mask, "quality_score"] -= self.PENALTIES["invalid_experience"]
-
-        df.loc[mask, "warnings"] += "Invalid Experience; "
-
-        return df
-
-    def classify_candidates(self, df):
-
-        df["status"] = "Accepted"
-
-        df.loc[df["quality_score"] < self.ACCEPTED_SCORE, "status"] = "Needs Review"
+        return candidate
         
-        df.loc[df["quality_score"] < self.REVIEW_SCORE, "status"] = "Rejected"
+    def validate_skills(self, candidate):
 
-        return df
+        if not candidate.get("skills"):
+            
+            candidate["quality_score"] -= self.PENALTIES["missing_skills"]
+
+            candidate["warnings"].append("Missing Skills")
+
+        return candidate
+        
+    def validate_companies(self, candidate):
+
+        if not candidate.get("profile", {}).get("current_company", "").strip():
+
+            candidate["quality_score"] -= self.PENALTIES["missing_company"]
+
+            candidate["warnings"].append("Missing Company")
+
+        return candidate
+    
+    def validate_email(self, candidate):
+
+        verified = candidate.get("redrob_signals", {}).get("verified_email", False)
+
+        if not verified:
+            candidate["quality_score"] -= self.PENALTIES["invalid_email"]
+            candidate["warnings"].append("Email Not Verified")
+
+        return candidate
+
+    def validate_education(self, candidate):
+
+        if not candidate.get("education"):
+
+            candidate["quality_score"] -= self.PENALTIES["missing_education"]
+
+            candidate["warnings"].append("Missing Education")
+
+        return candidate
+
+    
+    def validate_experience(self, candidate):
+
+        exp = candidate.get("profile", {}).get("years_of_experience", 0)
+
+        if exp < 0 or exp > 50:
+
+            candidate["quality_score"] -= self.PENALTIES["invalid_experience"]
+
+            candidate["warnings"].append("Invalid Experience")
+
+        return candidate
+
+    def classify_candidate(self, candidate):
+
+        candidate["status"] = "Accepted"
+
+        if candidate["quality_score"] < self.ACCEPTED_SCORE:
+            candidate["status"] = "Needs Review"
+
+        if candidate["quality_score"] < self.REVIEW_SCORE:
+            candidate["status"] = "Rejected"
+
+        return candidate
