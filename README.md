@@ -120,3 +120,5 @@ for field, value in parser.parse_stream(jd_text):
 - **New field?** Add it to `models.JobDescription` and `_SCHEMA_SKETCH` in `prompt_builder.py`. The normalizer / validator pick it up automatically.
 - **Different model?** `JDParser(model="llama3.1:8b-instruct", ...)` — any Ollama-served chat model with JSON mode works.
 - **Caching?** Use `parser.utils.stable_hash(cleaned_text)` as the key.
+
+

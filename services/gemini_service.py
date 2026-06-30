@@ -1,270 +1,79 @@
 """
-services/gemini_service.py
-───────────────────────────
-The real Gemini integration. Previously this file existed but was never
-imported by app.py — JD parsing and scoring ran entirely on regex/keyword
-rules instead. This version is wired into core/parser.py and core/scorer.py
-as the primary path, with the old regex pipeline kept only as an offline
-fallback when no API key is present or a call fails.
+services.gemini_service
+=======================
+Gemini API surface for JD parsing. This module does **not** reimplement
+Gemini — it wraps the existing functions in ``core.parser`` so the rest
+of the codebase has a single, stable import path.
+
+Public API
+----------
+* ``is_available()``      — ``bool`` (any keys configured?)
+* ``parse_text(text)``    — parse a JD string, returns legacy-shape dict
+* ``parse_upload(file)``  — parse a Streamlit ``UploadedFile`` (PDF/DOCX/TXT)
+
+Design notes
+------------
+* Both ``parse_*`` functions resolve API keys themselves through
+  :func:`core.helpers.gemini_keys` so callers never need to thread keys
+  around.
+* The underlying ``core.parser`` returns ``_source="gemini"`` on
+  success and ``_source="offline-regex"`` when Gemini failed and its
+  internal fallback fired. We surface that flag unchanged so the
+  orchestrator (``services.jd_service``) can decide what to do.
 """
 
-import json
-import re
+from __future__ import annotations
 
-from google import genai
+from typing import Any
 
-from services.llm_service import LLMProvider
-from services.config import GEMINI_MODEL, SCORING_BATCH_SIZE
-from services.key_rotation import (
-    KeyRotationState,
-    is_key_exhaustion_error,
-    load_gemini_api_keys,
+from core.helpers import gemini_keys, has_gemini as _has_gemini
+from core.logger import get_logger
+
+# Delegate to the user's existing implementation — do NOT rewrite it.
+from core.parser import (  # noqa: F401 — re-exported for advanced callers
+    parse_jd_with_ai as _parse_text_with_ai,
+    parse_jd_from_upload_with_ai as _parse_upload_with_ai,
 )
 
-
-class GeminiExtractionError(Exception):
-    """Raised when Gemini returns something we can't parse as JSON."""
-    pass
+log = get_logger(__name__)
 
 
-def _strip_code_fences(text: str) -> str:
-    text = text.strip()
-    text = re.sub(r'^```(?:json)?\s*', '', text)
-    text = re.sub(r'\s*```$', '', text)
-    return text.strip()
+# ─── Availability ──────────────────────────────────────────────────────────────
+def is_available() -> bool:
+    """True iff at least one Gemini API key is configured."""
+    return _has_gemini()
 
 
-def _extract_json_block(text: str):
+# ─── Parse interfaces ──────────────────────────────────────────────────────────
+def parse_text(text: str) -> dict[str, Any]:
     """
-    Pull the first valid JSON object/array out of a model response, even if
-    the model added stray prose around it. Tries, in order:
-      1. The whole (fence-stripped) text as-is.
-      2. The first {...} or [...] balanced block found in the text.
+    Parse a JD string via Gemini. Returns the legacy-shape dict
+    (``role``, ``company``, flat ``skills``, …).
+
+    On Gemini failure ``_source`` will be ``"offline-regex"`` (Gemini's
+    own internal regex fallback fired) — the orchestrator uses that to
+    decide whether to retry with Qwen.
     """
-    cleaned = _strip_code_fences(text)
-    try:
-        return json.loads(cleaned)
-    except json.JSONDecodeError:
-        pass
-
-    # Find the first '{' or '[' and try to match its closing bracket.
-    for open_ch, close_ch in (('{', '}'), ('[', ']')):
-        start = cleaned.find(open_ch)
-        if start == -1:
-            continue
-        depth = 0
-        for i in range(start, len(cleaned)):
-            if cleaned[i] == open_ch:
-                depth += 1
-            elif cleaned[i] == close_ch:
-                depth -= 1
-                if depth == 0:
-                    candidate = cleaned[start:i + 1]
-                    try:
-                        return json.loads(candidate)
-                    except json.JSONDecodeError:
-                        break
-
-    raise GeminiExtractionError(f"Could not parse JSON from model response: {text[:300]}")
+    keys = gemini_keys()
+    if not keys:
+        log.info("gemini.parse_text: no API keys configured")
+        return {"_source": "no-gemini-keys"}
+    return dict(_parse_text_with_ai(text, api_key=keys) or {})
 
 
-class GeminiProvider(LLMProvider):
+def parse_upload(uploaded_file) -> tuple[dict[str, Any], str]:
+    """
+    Parse a Streamlit ``UploadedFile`` via Gemini.
 
-    def __init__(self, api_key, model: str = GEMINI_MODEL):
-        self.api_keys = load_gemini_api_keys(api_key)
-        if not self.api_keys:
-            raise ValueError("No Gemini API keys provided.")
-        self.model = model
-        self._pool_id = tuple(self.api_keys)
+    Returns ``(jd_dict, raw_text)`` so the caller can stash the raw text
+    in session_state alongside the parsed dict.
+    """
+    keys = gemini_keys()
+    if not keys:
+        log.info("gemini.parse_upload: no API keys configured")
+        return ({"_source": "no-gemini-keys"}, "")
+    jd, text = _parse_upload_with_ai(uploaded_file, api_key=keys)
+    return dict(jd or {}), (text or "")
 
-    def _client_for_key(self, api_key: str):
-        return genai.Client(api_key=api_key)
 
-    def _call_with_rotation(self, operation_name: str, operation):
-        """
-        Try each configured key until one succeeds.
-
-        If Gemini returns a quota / exhaustion error for a key, mark it as
-        exhausted and continue with the next key. Non-quota errors fail fast.
-        """
-        keys = self.api_keys
-        if not keys:
-            raise ValueError("No Gemini API keys configured.")
-
-        start = KeyRotationState.current_index(self._pool_id) % len(keys)
-        last_error = None
-
-        for offset in range(len(keys)):
-            index = (start + offset) % len(keys)
-            api_key = keys[index]
-            try:
-                result = operation(self._client_for_key(api_key))
-                KeyRotationState.mark_success(self._pool_id, index)
-                return result
-            except Exception as exc:
-                if is_key_exhaustion_error(exc):
-                    last_error = exc
-                    KeyRotationState.mark_exhausted(self._pool_id, index)
-                    continue
-                raise
-
-        if last_error is not None:
-            raise last_error
-        raise RuntimeError(f"{operation_name} failed with no usable Gemini API key.")
-
-    def _generate(self, prompt: str) -> str:
-        response = self._call_with_rotation(
-            "generate_content",
-            lambda client: client.models.generate_content(
-                model=self.model,
-                contents=prompt,
-            ),
-        )
-        return response.text
-
-    # ── Connection check ────────────────────────────────────────────────
-    def test_connection(self):
-        return self._generate("Say hello in one short sentence.")
-
-    # ── JD extraction ───────────────────────────────────────────────────
-    def extract_jd(self, text: str) -> dict:
-        prompt = f"""You are an expert technical recruiter. Read the job description
-below and extract structured fields. Reason about CONTEXT, not just keyword
-matching — e.g. infer seniority from responsibilities even if no years are
-stated, and distinguish the HIRING company from any client/customer names
-mentioned in the JD body.
-
-Return ONLY valid JSON (no markdown fences, no commentary) with exactly
-this shape:
-{{
-  "role": "<job title, concise>",
-  "company": "<the company that is HIRING for this role>",
-  "location": "<primary work location, city/region, or 'Remote'>",
-  "employment_type": "<Full-time | Part-time | Contract | Internship | Freelance | null>",
-  "education": "<minimum education requirement, or null>",
-  "industry": "<industry/domain, or null>",
-  "experience_min": <integer years, or null>,
-  "experience_max": <integer years, or null>,
-  "skills": ["<all relevant skills/technologies mentioned, lowercase>"],
-  "must_have_skills": ["<skills explicitly described as required/mandatory>"],
-  "nice_to_have_skills": ["<skills described as a plus/bonus/preferred>"],
-  "summary": "<one or two sentence plain-English summary of the role>"
-}}
-
-If a field cannot be determined, use null (or an empty list for list fields).
-Do not invent information that isn't supported by the text.
-
-JOB DESCRIPTION:
-{text[:12000]}
-"""
-        raw = self._generate(prompt)
-        data = _extract_json_block(raw)
-        if not isinstance(data, dict):
-            raise GeminiExtractionError("Expected a JSON object for JD extraction.")
-        return data
-
-    # ── Candidate file column mapping ───────────────────────────────────
-    def map_candidate_columns(self, columns: list, sample_rows: list) -> dict:
-        prompt = f"""You're given the column headers and a few sample rows from a
-candidate spreadsheet. Map each CANONICAL field below to the actual column
-name in this file that best represents it. Only include a canonical key if
-you're reasonably confident a matching column exists — omit it otherwise.
-
-CANONICAL FIELDS: name, role, location, experience, skills, email, company,
-education
-
-COLUMNS IN FILE: {json.dumps(columns)}
-
-SAMPLE ROWS:
-{json.dumps(sample_rows, default=str)[:4000]}
-
-Return ONLY a JSON object mapping canonical_field -> actual_column_name,
-e.g. {{"name": "Full Name", "skills": "Tech Stack"}}. No commentary.
-"""
-        raw = self._generate(prompt)
-        data = _extract_json_block(raw)
-        if not isinstance(data, dict):
-            raise GeminiExtractionError("Expected a JSON object for column mapping.")
-        return data
-
-    # ── Batch candidate scoring ─────────────────────────────────────────
-    def score_candidates(self, jd: dict, candidates: list) -> list:
-        """
-        Scores candidates in batches of SCORING_BATCH_SIZE so prompts stay
-        small and responses stay reliable, then merges all batches.
-        """
-        results = []
-        for i in range(0, len(candidates), SCORING_BATCH_SIZE):
-            batch = candidates[i:i + SCORING_BATCH_SIZE]
-            results.extend(self._score_batch(jd, batch))
-        return results
-
-    def _score_batch(self, jd: dict, batch: list) -> list:
-        prompt = f"""You are an expert technical recruiter ranking candidates against a
-job description. Use ALL the information given for each candidate — not
-just an explicit "skills" field. Career metadata, activity/engagement
-signals, certifications, project history, or anything else present in a
-candidate's row should inform your judgement of fit, the same way a human
-recruiter would read a full profile rather than just keyword-matching a
-resume.
-
-JOB DESCRIPTION:
-{json.dumps(jd, default=str)}
-
-CANDIDATES (each is one full row from the uploaded dataset):
-{json.dumps(batch, default=str)[:30000]}
-
-For EACH candidate, return an entry with this exact shape:
-{{
-  "_row_id": <the _row_id from the input, unchanged>,
-  "total_score": <integer 0-100>,
-  "skill_score": <integer 0-40, how well their skills/experience match required skills>,
-  "role_score": <integer 0-30, how well their role/title/seniority matches>,
-  "signal_score": <integer 0-30, holistic fit from location, career trajectory,
-                    activity/behavioral signals, education, and any other
-                    available context — your judgement call>,
-  "matched_skills": ["<skills from the JD this candidate clearly has>"],
-  "missing_skills": ["<required skills from the JD this candidate appears to lack>"],
-  "rationale": "<one concise sentence on why this score, mentioning the
-                 single strongest and single weakest factor>"
-}}
-
-total_score should equal skill_score + role_score + signal_score.
-Rank candidates fairly relative to EACH OTHER within this batch — spread
-scores out meaningfully, don't cluster everyone in a narrow band unless
-they are genuinely that similar.
-
-Return ONLY a JSON array of these objects, one per candidate, in the same
-order as the input. No commentary, no markdown fences.
-"""
-        raw = self._generate(prompt)
-        data = _extract_json_block(raw)
-        if not isinstance(data, list):
-            raise GeminiExtractionError("Expected a JSON array for candidate scoring.")
-        return data
-
-    # ── Chatbot ──────────────────────────────────────────────────────────
-    def chat(self, message: str, context: dict, history: list) -> str:
-        history_text = "\n".join(
-            f"{h.get('role', 'user').upper()}: {h.get('content', '')}"
-            for h in (history or [])[-8:]
-        )
-        prompt = f"""You are an AI recruiting assistant embedded in a hiring dashboard.
-Answer the recruiter's question using ONLY the context below. Be concise
-and direct — a few sentences or a short list, not an essay. If asked to
-compare or recommend candidates, refer to them by name and cite concrete
-reasons from the data (scores, skills, location, etc).
-
-JOB DESCRIPTION CONTEXT:
-{json.dumps(context.get('jd', {}), default=str)}
-
-SCORED CANDIDATES (top results, ranked):
-{json.dumps(context.get('candidates', []), default=str)[:20000]}
-
-CONVERSATION SO FAR:
-{history_text}
-
-RECRUITER'S NEW QUESTION:
-{message}
-"""
-        return self._generate(prompt)
+__all__ = ["is_available", "parse_text", "parse_upload"]

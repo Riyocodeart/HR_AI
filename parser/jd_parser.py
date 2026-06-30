@@ -3,7 +3,7 @@ parser.jd_parser
 ================
 Main orchestrator for the JD extraction pipeline.
 
-    Raw JD ─► Cleaner ─► PromptBuilder ─► Ollama(Qwen2.5:7B-Instruct)
+    Raw JD ─► Cleaner ─► PromptBuilder ─► Ollama(model: str = "qwen2.5:1.5b-instruct",)
             ─► JSON Extract ─► Schema Validate ─► Normalize ─► dict
 
 Public entry point
@@ -50,7 +50,8 @@ class JDParser:
     Parameters
     ----------
     model : str
-        Ollama model tag. Default ``"qwen2.5:7b-instruct"``.
+        Ollama model tag. Default ``"model: str = "qwen2.5:1.5b-instruct",
+"``.
     host : str
         Ollama server URL.
     schema_path : str | Path | None
@@ -66,7 +67,7 @@ class JDParser:
 
     def __init__(
         self,
-        model: str = "qwen2.5:7b-instruct",
+        model: str = "qwen2.5:1.5b-instruct",
         host: str = "http://localhost:11434",
         schema_path: str | Path | None = None,
         temperature: float = 0.0,
