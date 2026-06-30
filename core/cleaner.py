@@ -94,16 +94,32 @@ class DataCleaner:
 }
         
 
-    def clean_jsonl(self, input_file, output_file):
+    def clean_jsonl(self, input_file, output_file, rejected_file=None):
+        """
+        Blueprint (datacleaning.md, Step 5/6): Accepted + Needs Review candidates
+        go to `output_file` (validated_candidates.json) and feed the scoring
+        engine. Rejected candidates go to a SEPARATE `rejected_file`
+        (rejected_candidates.json) for audit/logging only, and must never reach
+        the scorer. Previously every row was written to `output_file`
+        regardless of status, so Rejected rows ended up in scoring too.
+        """
+        if rejected_file is None:
+            rejected_file = output_file.rsplit(".", 1)[0] + ".rejected.jsonl" \
+                if "." in output_file else output_file + ".rejected"
 
         with open(input_file, "r", encoding="utf-8") as infile, \
-        open(output_file, "w", encoding="utf-8") as outfile:
-            
+             open(output_file, "w", encoding="utf-8") as valid_out, \
+             open(rejected_file, "w", encoding="utf-8") as reject_out:
+
             for line in infile:
                 candidate = json.loads(line)
-
                 candidate = self.clean_candidate(candidate)
-                outfile.write(json.dumps(candidate, ensure_ascii=False) + "\n")
+
+                if candidate["status"] == "Rejected":
+                    reject_out.write(json.dumps(candidate, ensure_ascii=False) + "\n")
+                else:
+                    # Accepted or Needs Review -> validated output, scoring-eligible
+                    valid_out.write(json.dumps(candidate, ensure_ascii=False) + "\n")
 
     def clean_candidate(self, candidate):
         candidate["quality_score"] = 100
