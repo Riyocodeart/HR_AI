@@ -54,6 +54,7 @@ from services.key_rotation import load_gemini_api_keys
 # ─── Offline JD Parser (Qwen 2.5 7B via Ollama) ────────────────────────────────
 from pathlib import Path
 from parser import JDParser, OllamaError
+from parser.cleaner import JDCleaner
 from ui.jd_parser_animation import (
     render_parsing_animation,
     animate_reveal,
@@ -470,6 +471,11 @@ def _parse_jd_chain(jd_text: str, container) -> dict | None:
         Legacy-shape JD on success, ``None`` if every layer failed.
     """
 
+    # ── JD Cleaner (parser/cleaner.py) ─────────────────────────────────────
+    # Strip boilerplate, invisible chars, bullet glyphs and collapse whitespace
+    # before the text reaches any parsing layer.
+    jd_text = JDCleaner().clean(jd_text)
+
     def _finalize(legacy: dict, rich: dict, engine_label: str) -> dict:
         """Common tail: stash full shape, run the typing animation, return legacy."""
         st.session_state.jd_data_full = rich
@@ -661,7 +667,7 @@ with st.sidebar:
 
     elif active == "chatbot":
         st.markdown('<div class="sidebar-section-label">Chat</div>', unsafe_allow_html=True)
-        if not _gemini_key():
+        if not _gemini_keys():
             st.markdown('<span style="font-size:0.78rem;color:#f59e0b">⚠ Add Gemini key above to enable chat.</span>', unsafe_allow_html=True)
         else:
             st.markdown('<span style="font-size:0.8rem;color:#10b981">✓ Gemini key active</span>', unsafe_allow_html=True)
@@ -824,30 +830,221 @@ if st.session_state.active_tab == "recruiter":
     # ── STEP 2: Upload Candidates ───────────────────────────────────────────────
     if st.session_state.jd_data:
         st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 02</div><div class="step-title">Upload Candidate Dataset</div>', unsafe_allow_html=True)
-        c1, c2 = st.columns([1, 1], gap="large")
-        with c1:
-            st.caption("CSV or Excel (.xlsx) — any column names. AI maps them automatically.")
-            cand_file = st.file_uploader("Candidate file", type=["csv","xlsx","xls"], label_visibility="collapsed")
-            if cand_file:
-                try:
+
+        tab_jsonl, tab_csv = st.tabs(["📄  JSONL (Hackathon Dataset)", "📊  CSV / Excel"])
+
+        # ── Tab A: JSONL ──────────────────────────────────────────────────
+        with tab_jsonl:
+            ja, jb = st.columns([1, 1], gap="large")
+            with ja:
+
+                # ── Auto-detect candidates.jsonl on the machine ───────────
+                import glob, os as _os
+
+                def _find_jsonl() -> str:
+                    """Search common locations for candidates.jsonl."""
+                    search_roots = [
+                        _os.getcwd(),                                    # where streamlit is running
+                        _os.path.dirname(_os.path.abspath(__file__)),    # app.py's folder
+                        _os.path.join(_os.path.expanduser("~"), "Downloads"),
+                        _os.path.join(_os.path.expanduser("~"), "Desktop"),
+                        _os.path.join(_os.path.expanduser("~"), "OneDrive"),
+                        _os.path.join(_os.path.expanduser("~"), "Documents"),
+                    ]
+                    for root in search_roots:
+                        for match in glob.glob(
+                            _os.path.join(root, "**", "candidates.jsonl"),
+                            recursive=True
+                        ):
+                            return match
+                    return ""
+
+                if "jsonl_auto_path" not in st.session_state:
+                    st.session_state.jsonl_auto_path = _find_jsonl()
+
+                # ── Option 1: Load directly from disk ────────────────────
+                st.markdown("**⚡ Load from local path**")
+                st.caption("Reads directly from disk — no browser upload limit.")
+
+                detected = st.session_state.jsonl_auto_path
+                if detected:
+                    st.success(f"✓ Found: `{detected}`")
+                else:
+                    st.warning("Could not auto-detect — paste the full path below.")
+
+                local_path = st.text_input(
+                    "Path to candidates.jsonl",
+                    value=detected,
+                    placeholder=r"C:\Users\...\candidates.jsonl",
+                    label_visibility="collapsed",
+                    key="jsonl_local_path"
+                )
+                load_local = st.button("⚡ Load from Path", use_container_width=True, key="btn_load_local")
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # ── Option 2: Browser upload (fallback) ───────────────────
+                st.markdown("**📁 Or upload file** *(only if under 200MB)*")
+                jsonl_file = st.file_uploader(
+                    "candidates.jsonl", type=["jsonl", "json"],
+                    label_visibility="collapsed", key="jsonl_uploader"
+                )
+
+                # ── Shared loader function ────────────────────────────────
+                def _load_jsonl_from_path(path: str):
+                    import tempfile, os as _os
+                    from parser.jsonl_reader import JSONLReader
+
+                    if not Path(path).exists():
+                        st.error(f"File not found: {path}")
+                        return
+
+                    with st.spinner(f"Reading {Path(path).name}… (100k candidates takes ~25s)"):
+                        reader = JSONLReader(path, skip_invalid=True)
+                        candidates_raw, parse_errors = reader.read_all()
+
                     cleaner = DataCleaner()
-                    #df = load_candidates(cand_file)
-                    #df = cleaner.clean(df)
-                    st.write(df[df["name"] == "Arvind"][["experience", "quality_score", "warnings", "status"]])
+                    rows = []
+                    for c in candidates_raw:
+                        # Run core/cleaner.py DataCleaner on the raw candidate dict
+                        # (standardises names, roles, locations, skills, experience,
+                        #  validates fields and assigns quality_score / status).
+                        # Use to_dict() so DataCleaner receives plain nested dicts,
+                        # not nested dataclass objects (c.__dict__ kept ParsedProfile
+                        # objects which made every .get("profile",{}).get(...) fail).
+                        raw_dict = c.to_dict() if hasattr(c, "to_dict") else {}
+                        try:
+                            raw_dict = cleaner.clean_candidate(raw_dict)
+                        except Exception:
+                            pass  # if dict shape doesn't match, proceed uncleaned
+
+                        p   = c.profile
+                        sig = c.redrob_signals
+                        edu_str = ""
+                        if c.education:
+                            edu_str = f"{c.education[0].degree} {c.education[0].institution}".strip()
+                        rows.append({
+                            "candidate_id":       c.candidate_id,
+                            "name":               p.anonymized_name or c.candidate_id,
+                            "role":               p.current_title,
+                            "company":            p.current_company,
+                            "location":           ", ".join(filter(None, [p.location, p.country])),
+                            "experience":         p.years_of_experience,
+                            "skills":             ", ".join(s.name for s in c.skills),
+                            "education":          edu_str,
+                            "email":              "",
+                            "open_to_work":       sig.open_to_work_flag,
+                            "notice_period_days": sig.notice_period_days,
+                            "github_score":       sig.github_activity_score,
+                            "response_rate":      sig.recruiter_response_rate,
+                            "last_active":        sig.last_active_date or "",
+                            "completeness":       sig.profile_completeness_score,
+                            "quality_score":      raw_dict.get("quality_score", 100),
+                            "data_status":        raw_dict.get("status", ""),
+                            "warnings":           raw_dict.get("warnings", ""),
+                        })
+
+                    df = pd.DataFrame(rows)
+
+                    # ── Blueprint split (datacleaning.md Step 5/6) ──────────
+                    # Only Accepted / Needs Review candidates are scoring-eligible
+                    # (validated_candidates.json). Rejected candidates are kept
+                    # for audit only and must NOT enter the scoring pool
+                    # (rejected_candidates.json -> Audit / Logs).
+                    rejected_mask = df["data_status"] == "Rejected"
+                    st.session_state.rejected_df = df[rejected_mask].reset_index(drop=True)
+                    df = df[~rejected_mask].reset_index(drop=True)
+
                     st.session_state.candidates_df = df
-                    st.success(f"✓ Loaded {len(df)} candidates across {len(df.columns)} columns")
-                    # Auto-detect columns so we can show mapping to user
-                    col_map = detect_columns(df, st.session_state.jd_data, api_key=_gemini_keys())
-                    st.session_state.col_map = col_map
-                    if col_map:
-                        mapping_str = " · ".join(f"{v} → {k}" for k, v in col_map.items())
-                        st.caption(f"Column mapping detected: {mapping_str}")
-                except Exception as e:
-                    st.error(f"Could not load file: {e}")
-        with c2:
-            if st.session_state.candidates_df is not None:
-                st.caption("Preview — first 5 rows")
-                st.dataframe(st.session_state.candidates_df.head(), use_container_width=True, height=220)
+                    st.session_state.col_map = {
+                        "name": "name", "role": "role", "location": "location",
+                        "experience": "experience", "skills": "skills",
+                        "company": "company", "education": "education",
+                    }
+                    n_rejected = int(rejected_mask.sum())
+                    st.success(
+                        f"✓ {len(df):,} candidates loaded · {len(parse_errors)} skipped "
+                        f"· {n_rejected:,} rejected by data-quality rules (excluded from scoring)"
+                    )
+                    if n_rejected:
+                        with st.expander(f"⛔ {n_rejected:,} rejected candidates (excluded from scoring)"):
+                            st.caption("These failed quality checks (quality_score < 50) and are kept for audit only — see Blueprint datacleaning.md Step 5/6.")
+                            st.dataframe(
+                                st.session_state.rejected_df[["candidate_id", "name", "quality_score", "warnings"]].head(20),
+                                use_container_width=True
+                            )
+                    if parse_errors:
+                        with st.expander(f"⚠ {len(parse_errors)} skipped"):
+                            for e in parse_errors[:10]:
+                                st.caption(f"Line {e.line_number}: {e.reason}")
+
+                # ── Trigger: local path button ────────────────────────────
+                if load_local and local_path.strip():
+                    try:
+                        _load_jsonl_from_path(local_path.strip())
+                    except Exception as e:
+                        st.error(f"Could not load: {e}")
+
+                # ── Trigger: browser upload ───────────────────────────────
+                if jsonl_file:
+                    try:
+                        import tempfile, os as _os
+                        with tempfile.NamedTemporaryFile(
+                            delete=False, suffix=".jsonl", mode="wb"
+                        ) as tmp:
+                            tmp.write(jsonl_file.read())
+                            tmp_path = tmp.name
+                        _load_jsonl_from_path(tmp_path)
+                        _os.unlink(tmp_path)
+                    except Exception as e:
+                        st.error(f"Could not load JSONL: {e}")
+
+            with jb:
+                if st.session_state.candidates_df is not None:
+                    st.caption("Preview — first 5 rows")
+                    st.dataframe(
+                        st.session_state.candidates_df.head(),
+                        use_container_width=True, height=240
+                    )
+
+        # ── Tab B: CSV / Excel ────────────────────────────────────────────
+        with tab_csv:
+            ca, cb = st.columns([1, 1], gap="large")
+            with ca:
+                st.caption("CSV or Excel (.xlsx) — any column names. AI maps them automatically.")
+                cand_file = st.file_uploader(
+                    "Candidate file", type=["csv", "xlsx", "xls"],
+                    label_visibility="collapsed", key="csv_uploader"
+                )
+                if cand_file:
+                    try:
+                        df = load_candidates(cand_file)
+                        # NOTE: core/cleaner.py DataCleaner.clean_candidate() is built for
+                        # the nested JSONL hackathon-dataset shape
+                        # (profile / skills / education / redrob_signals — see
+                        # Blueprint datacleaning.md). A generic CSV/Excel upload has
+                        # flat, arbitrary column names (mapped later by detect_columns
+                        # below), so DataCleaner cannot validate it — running it here
+                        # silently did nothing useful (wrapped in try/except: pass)
+                        # while implying rows had been quality-checked. Removed rather
+                        # than left as dead/misleading code; CSV/Excel rows are NOT
+                        # rejection-filtered, only AI-column-mapped.
+                        st.session_state.candidates_df = df
+                        st.success(f"✓ {len(df)} candidates loaded · {len(df.columns)} columns")
+                        col_map = detect_columns(df, st.session_state.jd_data, api_key=_gemini_keys())
+                        st.session_state.col_map = col_map
+                        if col_map:
+                            st.caption("Detected: " + " · ".join(f"{v}→{k}" for k, v in col_map.items()))
+                    except Exception as e:
+                        st.error(f"Could not load file: {e}")
+            with cb:
+                if st.session_state.candidates_df is not None:
+                    st.caption("Preview — first 5 rows")
+                    st.dataframe(
+                        st.session_state.candidates_df.head(),
+                        use_container_width=True, height=240
+                    )
+
         st.markdown("</div>", unsafe_allow_html=True)
 
     # ── STEP 3: Score ───────────────────────────────────────────────────────────
@@ -1112,7 +1309,7 @@ elif st.session_state.active_tab == "chatbot":
       <p>Grounded on your JD + scored candidates · Powered by Gemini</p>
     </div>""", unsafe_allow_html=True)
 
-    if not _gemini_key():
+    if not _gemini_keys():
         st.warning("⚠ Add your Gemini API key in the sidebar to enable the chatbot.")
     else:
         # Context for Gemini
