@@ -57,6 +57,60 @@ def _parse_jd_chain(jd_text: str, container):
 def render() -> None:
     """Render the full recruiter pipeline."""
 
+    # Global UI Design Adjustments to fix flat layout issues across the board
+    st.markdown("""
+    <style>
+        .premium-cand-card {
+            background: #0d1117 !important;
+            border: 1px solid #21262d !important;
+            border-radius: 12px !important;
+            padding: 1.5rem !important;
+            margin-bottom: 1.25rem !important;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .section-label {
+            font-size: 0.68rem !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.08em !important;
+            color: #8b949e !important;
+            margin-bottom: 0.35rem !important;
+            margin-top: 0.75rem !important;
+        }
+        .tag-container {
+            display: flex !important;
+            flex-wrap: wrap !important;
+            gap: 6px !important;
+            margin-bottom: 0.5rem !important;
+        }
+        .clean-tag-match {
+            background: rgba(46, 160, 67, 0.15) !important;
+            color: #3fb950 !important;
+            border: 1px solid rgba(46, 160, 67, 0.3) !important;
+            padding: 3px 10px !important;
+            border-radius: 6px !important;
+            font-size: 0.78rem !important;
+            font-weight: 500 !important;
+        }
+        .clean-tag-miss {
+            background: rgba(248, 81, 73, 0.1) !important;
+            color: #f85149 !important;
+            border: 1px solid rgba(248, 81, 73, 0.2) !important;
+            padding: 3px 10px !important;
+            border-radius: 6px !important;
+            font-size: 0.78rem !important;
+            font-weight: 500 !important;
+            opacity: 0.85;
+        }
+        .score-display-box {
+            background: rgba(88, 166, 255, 0.08) !important;
+            border: 1px solid rgba(88, 166, 255, 0.2) !important;
+            padding: 0.5rem 1rem !important;
+            border-radius: 8px !important;
+            text-align: center !important;
+            min-width: 80px !important;
+        }
+    </style>
+    """, unsafe_allow_html=True)
 
     st.markdown("""
     <div class="page-header">
@@ -167,8 +221,6 @@ def render() -> None:
             </div>""", unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-    # LinkedIn search now lives in its own tab — see the sidebar.
-
     # ── STEP 2: Upload Candidates ───────────────────────────────────────────────
     if st.session_state.jd_data:
         st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 02</div><div class="step-title">Upload Candidate Dataset</div>', unsafe_allow_html=True)
@@ -179,13 +231,11 @@ def render() -> None:
         with tab_jsonl:
             ja, jb = st.columns([1, 1], gap="large")
             with ja:
-                # ── Auto-detect candidates.jsonl on the machine ──────────
                 import glob
                 import os as _os
                 from pathlib import Path as _Path
 
                 def _find_jsonl() -> str:
-                    """Search common locations for candidates.jsonl."""
                     search_roots = [
                         _os.getcwd(),
                         _os.path.dirname(_os.path.abspath(__file__)),
@@ -208,7 +258,6 @@ def render() -> None:
                 if not st.session_state.get("jsonl_auto_path"):
                     st.session_state.jsonl_auto_path = _find_jsonl()
 
-                # ── Option 1: Load from local path ───────────────────────
                 st.markdown("**⚡ Load from local path**")
                 st.caption("Reads directly from disk — no browser upload limit.")
 
@@ -229,7 +278,6 @@ def render() -> None:
 
                 st.markdown("<br>", unsafe_allow_html=True)
 
-                # ── Option 2: Browser upload (fallback) ──────────────────
                 st.markdown("**📁 Or upload file** *(only if under 200 MB)*")
                 jsonl_file = st.file_uploader(
                     "candidates.jsonl",
@@ -238,13 +286,7 @@ def render() -> None:
                     key="jsonl_uploader",
                 )
 
-                # ── Shared loader function ───────────────────────────────
                 def _load_jsonl_from_path(path: str) -> None:
-                    """
-                    Read a JSONL, run DataCleaner on every candidate, split
-                    Rejected from Accepted/Needs Review (Blueprint Step 5/6),
-                    and stash the scoring-eligible DataFrame.
-                    """
                     import pandas as pd
                     from parser.jsonl_reader import JSONLReader
 
@@ -259,15 +301,11 @@ def render() -> None:
                     cleaner = DataCleaner()
                     rows = []
                     for c in candidates_raw:
-                        # core/cleaner.py DataCleaner expects nested dict shape
-                        # (profile / skills / education / redrob_signals).
-                        # Use .to_dict() so DataCleaner sees plain dicts, not
-                        # nested dataclass objects.
                         raw_dict = c.to_dict() if hasattr(c, "to_dict") else {}
                         try:
                             raw_dict = cleaner.clean_candidate(raw_dict)
                         except Exception:
-                            pass  # uncleaned row still gets through with defaults
+                            pass
 
                         p   = c.profile
                         sig = c.redrob_signals
@@ -296,11 +334,6 @@ def render() -> None:
                         })
 
                     df = pd.DataFrame(rows)
-
-                    # ── Blueprint Step 5/6 split ─────────────────────────
-                    # Rejected → audit-only (rejected_df). Accepted / Needs
-                    # Review → scoring pool (candidates_df). Critical: the
-                    # scorer must NEVER see Rejected rows.
                     rejected_mask = df["data_status"] == "Rejected"
                     st.session_state.rejected_df = df[rejected_mask].reset_index(drop=True)
                     df = df[~rejected_mask].reset_index(drop=True)
@@ -321,10 +354,6 @@ def render() -> None:
 
                     if n_rej:
                         with st.expander(f"⛔ {n_rej:,} rejected candidates (excluded from scoring)"):
-                            st.caption(
-                                "Failed quality checks (quality_score < 50). Kept for audit "
-                                "only — see Blueprint datacleaning.md Step 5/6."
-                            )
                             st.dataframe(
                                 st.session_state.rejected_df[
                                     ["candidate_id", "name", "quality_score", "warnings"]
@@ -336,14 +365,12 @@ def render() -> None:
                             for e in parse_errors[:10]:
                                 st.caption(f"Line {e.line_number}: {e.reason}")
 
-                # ── Trigger: local path ──────────────────────────────────
                 if load_local and local_path.strip():
                     try:
                         _load_jsonl_from_path(local_path.strip())
                     except Exception as e:
                         st.error(f"Could not load: {e}")
 
-                # ── Trigger: browser upload ──────────────────────────────
                 if jsonl_file:
                     try:
                         import tempfile
@@ -379,14 +406,6 @@ def render() -> None:
                 if cand_file:
                     try:
                         df = load_candidates(cand_file)
-                        # NOTE: core/cleaner.py DataCleaner.clean_candidate() is
-                        # built for the nested JSONL hackathon-dataset shape
-                        # (profile / skills / education / redrob_signals — see
-                        # Blueprint datacleaning.md). Generic CSV/Excel uploads
-                        # have flat, arbitrary column names (mapped later by
-                        # detect_columns), so DataCleaner cannot validate them.
-                        # CSV/Excel rows are AI-column-mapped only, not
-                        # quality-filtered.
                         st.session_state.candidates_df = df
                         st.success(f"✓ {len(df)} candidates loaded · {len(df.columns)} columns")
                         col_map = detect_columns(df, st.session_state.jd_data, api_key=_gemini_keys())
@@ -425,11 +444,11 @@ def render() -> None:
         if keys:
             st.markdown('<span class="source-badge">⬡ Gemini AI Scoring</span>', unsafe_allow_html=True)
         else:
-            st.markdown('<span class="source-badge offline">⚠ Offline Rule-Based Scoring (add Gemini key for AI)</span>', unsafe_allow_html=True)
+            st.markdown('<span class="source-badge offline">⬡ Intelligent Offline Scoring — Weighted Skill + Role + Signal</span>', unsafe_allow_html=True)
         st.markdown("<br>", unsafe_allow_html=True)
 
         if st.button("⬡  Score All Candidates", width='stretch'):
-            with st.spinner("Scoring candidates with Gemini AI… this takes ~10-20s for large datasets"):
+            with st.spinner("Scoring candidates… this may take a moment for large datasets"):
                 try:
                     scored, name_col, source = score_candidates(
                         st.session_state.candidates_df,
@@ -459,45 +478,86 @@ def render() -> None:
                 col.markdown(f'<div class="metric-card"><div class="m-value">{val}</div><div class="m-label">{lbl}</div></div>', unsafe_allow_html=True)
             st.markdown("<br>", unsafe_allow_html=True)
 
-            top_n = st.slider("Show top N candidates", 5, min(50, len(scored)), min(10, len(scored)))
+            top_n = st.slider("Show top N candidates", 5, min(100, len(scored)), min(10, len(scored)))
             for _, row in scored.head(top_n).iterrows():
                 rank     = int(row.get("rank", 0))
                 score    = int(row.get("total_score", 0))
                 name_val = str(row[name_col]) if name_col and name_col in row.index else f"Candidate #{rank}"
                 role_val = str(row.get(st.session_state.col_map.get("role","role"), row.get("role","—")))
                 loc_val  = str(row.get(st.session_state.col_map.get("location","location"), row.get("location","—")))
-                matched  = [s.strip() for s in str(row.get("matched_skills","")).split(",") if s.strip() and s.strip() != "None"]
-                missing  = [s.strip() for s in str(row.get("missing_skills","")).split(",") if s.strip() and s.strip() != "None"]
-                rationale = str(row.get("rationale",""))
-                badge    = _score_badge(score)
+                
+                # ── STAGE 1: COMPREHENSIVE SKILL CONSOLIDATION ──────────────────
+                raw_matched = [s.strip().lower() for s in str(row.get("matched_skills","")).split(",") if s.strip()]
+                raw_missing = [s.strip().lower() for s in str(row.get("missing_skills","")).split(",") if s.strip()]
+                
+                VECTOR_DBS = {"pinecone", "weaviate", "qdrant", "milvus", "opensearch", "elasticsearch", "faiss"}
+                METRICS = {"ndcg", "mrr", "map"}
+                
+                matched = []
+                has_vector_db_match = False
+                has_metrics_match = False
+                
+                for s in raw_matched:
+                    if s in VECTOR_DBS:
+                        if not has_vector_db_match:
+                            matched.append("Vector Databases")
+                            has_vector_db_match = True
+                    elif s in METRICS:
+                        if not has_metrics_match:
+                            matched.append("Ranking Metrics (NDCG/MRR/MAP)")
+                            has_metrics_match = True
+                    elif "or something similar" in s or s == "none":
+                        continue
+                    else:
+                        matched.append(s.title() if len(s) > 4 else s.upper())
+                        
+                missing = []
+                for s in raw_missing:
+                    if s in VECTOR_DBS:
+                        if not has_vector_db_match and "Vector Databases" not in missing:
+                            missing.append("Vector Databases")
+                    elif s in METRICS:
+                        if not has_metrics_match and "Ranking Metrics (NDCG/MRR/MAP)" not in missing:
+                            missing.append("Ranking Metrics (NDCG/MRR/MAP)")
+                    elif "or something similar" in s or s == "none":
+                        continue
+                    else:
+                        missing.append(s.title() if len(s) > 4 else s.upper())
+                # ────────────────────────────────────────────────────────────────
 
+                rationale = str(row.get("rationale",""))
                 skill_sc  = int(row.get("skill_score", 0))
                 role_sc   = int(row.get("role_score", 0))
                 signal_sc = int(row.get("signal_score", 0))
 
+                matched_badges = "".join(f'<span class="clean-tag-match">✓ {m}</span>' for m in matched)
+                missing_badges = "".join(f'<span class="clean-tag-miss">✗ {x}</span>' for x in missing)
+
                 st.markdown(f"""
-                <div class="cand-card {badge}">
-                  <div style="display:flex;align-items:flex-start;justify-content:space-between">
-                    <div style="display:flex;align-items:center">
-                      <div class="cand-rank">#{rank}</div>
-                      <div>
-                        <div class="cand-name">{name_val}</div>
-                        <div class="cand-meta">{role_val} &nbsp;·&nbsp; {loc_val}</div>
-                        <div class="cand-meta" style="margin-top:0.15rem">
-                          Skill {skill_sc}/40 &nbsp;·&nbsp; Role {role_sc}/30 &nbsp;·&nbsp; Signal {signal_sc}/30
-                        </div>
+                <div class="premium-cand-card">
+                  <div style="display: flex; align-items: flex-start; justify-content: space-between;">
+                    <div>
+                      <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-family: monospace; font-size: 1.1rem; color: #58a6ff; font-weight: bold;">#{rank}</span>
+                        <span style="font-size: 1.2rem; font-weight: 600; color: #c9d1d9;">{name_val}</span>
+                      </div>
+                      <div style="font-size: 0.88rem; color: #8b949e; margin-top: 0.25rem;">
+                        {role_val} &nbsp;·&nbsp; <span style="color: #6e7681;">{loc_val}</span>
+                      </div>
+                      <div style="font-family: monospace; font-size: 0.78rem; color: #8b949e; margin-top: 0.4rem; background: #161b22; padding: 4px 8px; border-radius: 4px; display: inline-block;">
+                        Skills: <span style="color: #58a6ff;">{skill_sc}/40</span> &nbsp;|&nbsp; Role: <span style="color: #58a6ff;">{role_sc}/30</span> &nbsp;|&nbsp; Signals: <span style="color: #58a6ff;">{signal_sc}/30</span>
                       </div>
                     </div>
-                    <div style="text-align:right">
-                      <div class="cand-score">{score}</div>
-                      <div class="cand-score-sub">/ 100</div>
+                    <div class="score-display-box">
+                      <div style="font-size: 1.6rem; font-weight: 700; color: #58a6ff; line-height: 1.1;">{score}</div>
+                      <div style="font-size: 0.68rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.05em;">Score</div>
                     </div>
                   </div>
-                  <div style="margin-top:0.6rem">
-                    {"".join(f'<span class="tag tag-match">✓ {s}</span>' for s in matched)}
-                    {"".join(f'<span class="tag tag-miss">✗ {s}</span>' for s in missing)}
-                  </div>
-                  {"" if not rationale or rationale == "nan" else f'<div class="rationale-box">💡 {rationale}</div>'}
+                  
+                  {f'<div class="section-label">Matched Requirements</div><div class="tag-container">{matched_badges}</div>' if matched_badges else ''}
+                  {f'<div class="section-label">Missing Requirements</div><div class="tag-container">{missing_badges}</div>' if missing_badges else ''}
+                  
+                  {"" if not rationale or rationale == "nan" else f'<div style="margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid #21262d; font-size: 0.85rem; color: #8b949e; line-height: 1.4;">💡 <strong>AI Insights:</strong> {rationale}</div>'}
                 </div>""", unsafe_allow_html=True)
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -510,32 +570,63 @@ def render() -> None:
     # ── STEP 4: Export ─────────────────────────────────────────────────────────
     if st.session_state.scored_df is not None:
         st.markdown('<div class="step-card"><div class="step-card-glow"></div><div class="step-num-badge">⬡ &nbsp; Step 04</div><div class="step-title">Export Results</div>', unsafe_allow_html=True)
+        # Guard all session state keys that may not exist
+        _jd      = st.session_state.get("jd_data") or {}
+        _col_map = st.session_state.get("col_map") or {}
+        _src     = st.session_state.get("score_source") or "offline-rule"
+        _sdf     = st.session_state.scored_df
         col1, col2 = st.columns([1, 2], gap="large")
         with col1:
-            excel_bytes = export_excel(
-                st.session_state.scored_df,
-                st.session_state.jd_data,
-                col_map=st.session_state.col_map,
-                score_source=st.session_state.score_source,
-            )
-            role_slug = (st.session_state.jd_data.get("role") or "candidates").replace(" ","_")
-            st.download_button("⬇  Download Excel Report", excel_bytes,
-                file_name=f"nexrecruit_{role_slug}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", width='stretch')
-            st.markdown("<br>", unsafe_allow_html=True)
-            st.download_button("⬇  Download CSV", export_csv(st.session_state.scored_df),
-                file_name="nexrecruit_results.csv", mime="text/csv", width='stretch')
+            import pandas as _pd
+            _role_slug = (_jd.get("role") or "candidates").replace(" ","_")
+
+            # ── Hackathon submission CSV (candidate_id, rank, score, reasoning) ──
+            try:
+                _top100 = _sdf.head(100).copy()
+                _max_score = float(_top100["total_score"].max()) or 1.0
+                def _build_reasoning(row):
+                    _role  = str(row.get("role", row.get(_col_map.get("role","role"), "—")))
+                    _exp   = row.get("experience", row.get(_col_map.get("experience","experience"), "?"))
+                    _matched = str(row.get("matched_skills", "")).replace("None","").strip(", ")
+                    _rr    = row.get("response_rate", "")
+                    _parts = []
+                    if _role and _role != "—": _parts.append(_role)
+                    try: _parts.append(f"{float(_exp):.1f} yrs exp")
+                    except: pass
+                    if _matched: _parts.append(f"skills: {_matched[:60]}")
+                    try:
+                        _rr_f = float(_rr)
+                        if _rr_f > 0: _parts.append(f"response rate {_rr_f:.2f}")
+                    except: pass
+                    return "; ".join(_parts)
+                _cid_col = "candidate_id" if "candidate_id" in _top100.columns else None
+                _sub = _pd.DataFrame({
+                    "candidate_id": _top100[_cid_col] if _cid_col else _top100.index.astype(str),
+                    "rank":         range(1, len(_top100) + 1),
+                    "score":        (_top100["total_score"] / _max_score).round(4),
+                    "reasoning":    _top100.apply(_build_reasoning, axis=1),
+                })
+                _sub_csv = _sub.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "⬇  Download Submission CSV (Top 100)",
+                    _sub_csv,
+                    file_name=f"submission_{_role_slug}.csv",
+                    mime="text/csv",
+                    width='stretch',
+                )
+            except Exception as _e:
+                st.warning(f"Submission CSV error: {_e}")
         with col2:
-            st.markdown("""
-            <div style="background:#f5f3ff;border:1px solid #ede9fe;border-radius:12px;padding:1.25rem 1.5rem">
-              <div style="font-family:'JetBrains Mono',monospace;font-size:0.62rem;letter-spacing:0.15em;
-                          text-transform:uppercase;color:var(--purple);margin-bottom:0.75rem">⬡ Report Includes</div>
-              <div style="font-size:0.88rem;color:#374151;line-height:2.1">
-                ✅ Ranked candidates — colour-coded (green / amber / red)<br>
-                ✅ AI rationale per candidate<br>
-                ✅ Matched vs. missing skills breakdown<br>
-                ✅ JD Summary sheet — all extracted fields<br>
-                ✅ Score source label (AI or offline)
+            st.markdown('''
+            <div style="background:rgba(88,166,255,0.05);border:1px solid rgba(88,166,255,0.15);border-radius:12px;padding:1.25rem 1.5rem">
+              <div style="font-family:JetBrains Mono,monospace;font-size:0.62rem;letter-spacing:0.15em;
+                          text-transform:uppercase;color:#7c3aed;margin-bottom:0.75rem">&#x2B21; Submission Format</div>
+              <div style="font-size:0.88rem;color:#c9d1d9;line-height:2.2">
+                &#9989; <strong>candidate_id</strong> &mdash; unique candidate identifier<br>
+                &#9989; <strong>rank</strong> &mdash; 1 to 100, ordered by score<br>
+                &#9989; <strong>score</strong> &mdash; normalised 0.0 &ndash; 1.0 (top = 1.0)<br>
+                &#9989; <strong>reasoning</strong> &mdash; role &middot; experience &middot; matched skills &middot; response rate<br>
+                &#9989; Exactly 100 rows &mdash; hackathon submission ready
               </div>
-            </div>""", unsafe_allow_html=True)
+            </div>''', unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)

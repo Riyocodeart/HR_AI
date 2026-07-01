@@ -11,7 +11,7 @@ from __future__ import annotations
 
 # ─── Ollama / Qwen ──────────────────────────────────────────────────────────────
 OLLAMA_HOST = "http://localhost:11434"
-QWEN_MODEL = "qwen2.5:1.5b-instruct"
+QWEN_MODEL = "qwen2.5:1.5b"
 QWEN_SEED = 42
 QWEN_TEMPERATURE = 0.0
 QWEN_TIMEOUT_SEC = 120
