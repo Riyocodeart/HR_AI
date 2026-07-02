@@ -1,124 +1,343 @@
-# HR_AI
-# 🎯 AI Recruiter — Intelligent Candidate Screening
+# HR AI – Intelligent AI Recruitment System
 
-A full-stack AI-powered recruiter tool built with Streamlit + OpenAI.
+> An AI-powered recruitment platform that streamlines the hiring workflow by automating Job Description parsing, candidate validation, intelligent scoring, and recruiter decision-making using a **local Large Language Model (Qwen 2.5 via Ollama)**.
 
-## Pipeline
-1. **Upload JD** (PDF or paste text)
-2. **AI Extraction** — GPT-4o-mini extracts Role, Skills, Location, Experience
-3. **Upload Candidates CSV** (30–50 rows)
-4. **Filter & Score** — Skill (40pts) + Role (30pts) + Experience (30pts)
-5. **Export** — Color-coded Excel + CSV
+---
 
-## Setup
+# Features
+
+- 🤖 Offline AI-powered Job Description Parsing using Qwen 2.5
+- 📄 Upload Job Description (PDF / DOCX / TXT / Paste Text)
+- 🧠 Automatic extraction of Role, Skills, Experience, Location, and hiring requirements
+- 📁 Candidate JSON Upload
+- 📦 Automatic handling of large candidate datasets (>200 MB)
+- 🧹 Data Cleaning & Integrity Validation
+- 🏆 AI-assisted Candidate Scoring Engine
+- 📊 Recruiter Dashboard
+- 📤 Export Ranked Candidates (Excel / CSV)
+
+---
+
+# System Pipeline
+
+```mermaid
+flowchart TD
+
+A[Upload Job Description] --> B[Local LLM - Qwen 2.5 via Ollama]
+B --> C[Structured Job Description JSON]
+
+D[Upload Candidate JSON] --> E{JSON Size Check}
+
+E -->|≤ 200 MB| F[Load into Memory]
+E -->|> 200 MB| G[Process from File Path]
+
+F --> H[Data Cleaning & Integrity Validation]
+G --> H
+
+H --> I{Candidate Valid?}
+
+I -->|Yes| J[Candidate Scoring Engine]
+I -->|No| K[Exclude from Scoring]
+
+J --> L[Ranked Candidates]
+
+L --> M[Recruiter Dashboard]
+
+M --> N[Export Excel / CSV]
+```
+
+# Installation
+
+## 1. Clone the Repository
+
+```bash
+git clone <repository-url>
+cd HR_AI
+```
+
+---
+
+## 2. Create a Virtual Environment
+
+### Windows
+
+```bash
+python -m venv .venv
+.venv\Scripts\activate
+```
+
+### Linux / macOS
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+---
+
+## 3. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
-streamlit run app.py
-npm install linkedin-profile-scraper
-node scrape_linkedin.js
 ```
 
-## CSV Format
-Your candidates CSV should have these columns (names are auto-detected):
-| name | role | location | experience | skills |
-|------|------|----------|------------|--------|
-| Priya Sharma | Data Scientist | Mumbai | 4 | Python ML SQL |
+---
 
-A sample file `sample_candidates.csv` is included with 30 candidates.
+# Local LLM Setup (Ollama)
 
-## API Key
-Enter your OpenAI API key in the sidebar. The app uses `gpt-4o-mini` for cost efficiency.
+The application performs Job Description parsing using **Qwen 2.5** running locally through **Ollama**.
 
-## Scoring Logic
-```
-total_score = skill_score (0-40) + role_score (0-30) + experience_score (0-30)
-```
-- **Skill Score**: % of required skills found in candidate profile × 40
-- **Role Score**: keyword overlap between JD role and candidate role × 30  
-- **Experience Score**: 30 if within range, reduced for over/under-qualified
+This allows the project to work completely offline after the model has been downloaded.
 
-# JD Parser
+---
 
-Offline, deterministic Job-Description parser for the Redrob ranking pipeline.
+## Step 1 – Install Ollama
 
-Powered by **Qwen 2.5 7B Instruct** running locally via **Ollama**. No external APIs, no network calls during parsing.
+Download Ollama:
 
-## Pipeline
+https://ollama.com/download
 
-```
-Raw JD ─► Cleaner ─► PromptBuilder ─► Ollama (Qwen2.5:7B) ─►
-JSON Extract ─► Schema Validate ─► Normalize ─► dict
-```
-
-## Setup
+Verify installation:
 
 ```bash
-# 1. Pull the model (one-time, ~4.7 GB)
-ollama pull qwen2.5:7b-instruct
-
-# 2. Install Python deps
-pip install -r parser/requirements.txt
-
-# 3. Make sure the Ollama daemon is running
-ollama serve   # background, default port 11434
+ollama --version
 ```
 
-## Usage
+---
 
-### One-liner
+## Step 2 – Download the Local Model
 
-```python
-from parser import parse_job_description
-
-with open("job_description.txt") as f:
-    result = parse_job_description(f.read())
-
-print(result["job_title"], result["skills"]["required"])
+```bash
+ollama pull qwen2.5:1.5b
 ```
 
-### Long-lived (recommended in Streamlit)
+---
 
-```python
-from parser import JDParser
+## Step 3 – Verify Installation
 
-parser = JDParser(model="qwen2.5:7b-instruct", seed=42)  # construct once
-result = parser.parse(jd_text)                            # call many times
+```bash
+ollama list
 ```
 
-### Streamed reveal for UI
+Expected Output
 
-```python
-for field, value in parser.parse_stream(jd_text):
-    print(field, "→", value)
+```text
+qwen2.5:1.5b
 ```
 
-## File layout
+---
 
-| File                       | Responsibility                                              |
-| -------------------------- | ----------------------------------------------------------- |
-| `models.py`                | Pydantic schema (mirrors `jd_schema.json` + tech buckets)   |
-| `utils.py`                 | Logger, retry, file readers, hashing                        |
-| `cleaner.py`               | Unicode / whitespace / boilerplate cleanup                  |
-| `prompt_builder.py`        | System + user prompts (schema embedded)                     |
-| `json_validator.py`        | JSON extract → schema validate → repair                     |
-| `normalizer.py`            | Canonicalise enums, dedupe lists, coerce numbers            |
-| `jd_parser.py`             | Orchestrator + `parse_job_description()` + `JDParser` class |
-| `__init__.py`              | Public API re-exports                                       |
-| `requirements.txt`         | Runtime deps                                                |
+## Step 4 – Start Ollama
 
-## Guarantees
+If the Ollama service is not already running:
 
-- **Deterministic** — `temperature=0`, `seed=42`, fixed prompt.
-- **Schema-validated** — every output passes `jsonschema` against `jd_schema.json`.
-- **Never hallucinates** — missing scalar → `null`, missing list → `[]`.
-- **Resilient** — auto-retry once on validation failure, then heuristic JSON repair.
-- **Modular** — each file has one responsibility; easy to extend.
+```bash
+ollama serve
+```
 
-## Extending
+(Optional test)
 
-- **New field?** Add it to `models.JobDescription` and `_SCHEMA_SKETCH` in `prompt_builder.py`. The normalizer / validator pick it up automatically.
-- **Different model?** `JDParser(model="llama3.1:8b-instruct", ...)` — any Ollama-served chat model with JSON mode works.
-- **Caching?** Use `parser.utils.stable_hash(cleaned_text)` as the key.
+```bash
+ollama run qwen2.5:1.5b
+```
 
+---
+
+# Configuration
+
+The application is designed to run **completely offline** using **Qwen 2.5 via Ollama**.
+
+Although the interface provides fields for external AI API keys (such as Gemini), **they are optional and are not required for the current implementation**.
+
+The local Ollama model handles Job Description parsing by default.
+
+The external provider configuration has been retained only to support future extensibility and fallback mechanisms.
+
+---
+
+# Running the Application
+
+```bash
+streamlit run app.py
+```
+
+---
+
+# Job Description Parsing
+
+Uploaded Job Descriptions are processed locally using **Qwen 2.5**.
+
+The parser extracts structured hiring information including:
+
+- Job Title
+- Required Skills
+- Preferred Skills
+- Experience Range
+- Location
+- Employment Type
+- Education Requirements
+- Additional Hiring Requirements
+
+The extracted information is converted into a structured JSON format and used throughout the recruitment workflow.
+
+---
+
+# Candidate Processing
+
+Candidates are uploaded as a structured JSON dataset.
+
+The application automatically determines how the uploaded dataset should be processed.
+
+### JSON ≤ 200 MB
+
+The complete dataset is loaded directly into memory.
+
+### JSON > 200 MB
+
+Instead of loading the complete dataset into RAM, the application processes candidates directly from the uploaded file path.
+
+This significantly reduces memory usage while supporting very large candidate datasets.
+
+---
+
+# Data Cleaning & Integrity Validation
+
+Before entering the scoring pipeline, every candidate profile undergoes integrity validation to ensure data quality and consistency.
+
+## Profile Validation
+
+- Candidate ID validation
+- Experience validation
+- Current designation validation
+- Location validation
+- Country validation
+
+---
+
+## Career History Validation
+
+- Valid employment dates
+- Start date ≤ End date
+- Only one active employment
+- Duration consistency
+
+---
+
+## Education Validation
+
+- Institution present
+- Degree present
+- Graduation year validation
+- Education timeline consistency
+
+---
+
+## Skills Validation
+
+- Remove duplicate skills
+- Ignore empty skill entries
+- Normalize skill names
+
+---
+
+## Candidate Metadata Validation
+
+- Required fields present
+- Numeric field validation
+- Boolean field validation
+- Missing value handling
+
+---
+
+## Validation Decision
+
+Every uploaded candidate is validated before entering the scoring engine.
+
+### Valid Candidates
+
+- Forwarded directly to the Candidate Scoring Engine.
+
+### Invalid Candidates
+
+- Automatically excluded from scoring and ranking.
+
+This ensures that only high-quality and reliable candidate profiles participate in the final ranking process.
+
+---
+
+# Candidate Scoring Engine
+
+Validated candidates are ranked using multiple evaluation parameters, including:
+
+- Skill Match
+- Role Match
+- Experience Match
+- Candidate Metadata
+- Profile Quality Signals
+
+The scoring engine produces a ranked list of candidates for recruiter review.
+
+---
+
+# Recruiter Dashboard
+
+The recruiter dashboard provides:
+
+- Candidate Rankings
+- Candidate Search
+- Candidate Details
+- Score Comparison
+- Export Options
+
+---
+
+# Export
+
+The application supports exporting ranked candidates in:
+
+- Excel (.xlsx)
+- CSV (.csv)
+
+These exports can be used directly for recruiter review and further hiring workflows.
+
+---
+
+# Technologies Used
+
+- Python
+- Streamlit
+- Ollama
+- Qwen 2.5
+- Pandas
+- OpenPyXL
+- JSON
+- Pydantic
+
+---
+
+# Future Scope / In Progress
+
+The following enhancements are planned for future releases:
+
+- 💬 AI Recruiter Chatbot
+- 🔗 LinkedIn Profile URL Integration
+- 📧 Automated Email Outreach
+- 🤖 Multi-LLM Support
+- 🔄 OpenRouter Fallback for local model redundancy
+- 📝 Resume Summarization
+- 📅 Automated Interview Scheduling
+- 📈 Recruiter Analytics Dashboard
+- 🎯 Candidate Recommendation Engine
+
+---
+
+# Notes
+
+- The application is optimized to run completely offline after the Ollama model has been downloaded.
+- Candidate processing expects JSON input following the required schema.
+- Large candidate datasets (>200 MB) are processed using a file-path-based workflow to reduce memory consumption.
+- External AI providers are optional and are included only for future extensibility and fallback support.
+- No external API keys are required for the current implementation.
+
+---
 
