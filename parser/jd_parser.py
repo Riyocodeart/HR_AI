@@ -74,11 +74,16 @@ class JDParser:
         seed: int = 42,
         timeout: int = 120,
     ) -> None:
+            # Safety fallback: auto-correct "qwen2.5:1.5b" to "qwen2.5:1.5b-instruct"
+        if model == "qwen2.5:1.5b":
+            model = "qwen2.5:1.5b-instruct"
+            
         self.model = model
         self.host = host.rstrip("/")
         self.temperature = temperature
         self.seed = seed
         self.timeout = timeout
+        
 
         self.cleaner = JDCleaner()
         self.prompt_builder = PromptBuilder()

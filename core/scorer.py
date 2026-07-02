@@ -1008,7 +1008,28 @@ def score_candidates(df: pd.DataFrame, jd: dict, api_key: str = None, mode: str 
         scored = _score_candidates_offline(df, jd, col_map)
         source = "offline-rule"
 
-    scored = scored.sort_values("total_score", ascending=False).reset_index(drop=True)
+    # Tie-break rule (required by the hackathon validator): when two
+    # candidates have the same total_score, they must be ordered by
+    # candidate_id ascending, lexicographically (string comparison, not
+    # numeric). `sort_values` alone is stable but only sorts on
+    # total_score, so ties fall back to whatever order the input file
+    # happened to have — which is NOT candidate_id order and is what was
+    # causing "Equal scores at ranks N and N+1: tie-break requires
+    # candidate_id ascending" validator failures.
+    if "candidate_id" in scored.columns:
+        scored["_cid_sort_key"] = scored["candidate_id"].astype(str)
+        scored = scored.sort_values(
+            ["total_score", "_cid_sort_key"],
+            ascending=[False, True],
+            kind="mergesort",  # stable sort; irrelevant now but cheap insurance
+        ).drop(columns="_cid_sort_key").reset_index(drop=True)
+    else:
+        # No candidate_id column at all — nothing to break ties on, but at
+        # least keep the sort stable and deterministic.
+        scored = scored.sort_values(
+            "total_score", ascending=False, kind="mergesort"
+        ).reset_index(drop=True)
+
     scored.insert(0, "rank", range(1, len(scored) + 1))
 
     return scored, name_col, source
